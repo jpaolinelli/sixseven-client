@@ -1,36 +1,18 @@
 import pg from 'pg';
 import { registerTypes } from './type-mapping';
+import { toQueryResult } from './result';
 import { buildTraverse, buildNearest, buildLink, buildUnlink } from './query-builders';
 import type {
   ConnectionConfig,
   QueryResult,
-  FieldInfo,
   TraverseOptions,
   NearestOptions,
   LinkOptions,
-  DEFAULTS,
 } from './types';
 import { DEFAULTS as defaults } from './types';
 
 // Register custom type parsers on module load.
 registerTypes();
-
-/**
- * Convert a pg.QueryResult to our QueryResult shape.
- */
-function toQueryResult<T extends Record<string, unknown>>(pgResult: pg.QueryResult): QueryResult<T> {
-  const fields: FieldInfo[] = pgResult.fields.map((f) => ({
-    name: f.name,
-    dataTypeID: f.dataTypeID,
-  }));
-
-  return {
-    rows: pgResult.rows as T[],
-    fields,
-    rowCount: pgResult.rowCount ?? 0,
-    command: pgResult.command,
-  };
-}
 
 /**
  * Resolve a ConnectionConfig into the shape expected by pg.Client.

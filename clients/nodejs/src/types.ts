@@ -1,5 +1,3 @@
-import type { PoolConfig as PgPoolConfig } from 'pg';
-
 // ---------------------------------------------------------------------------
 // Connection configuration
 // ---------------------------------------------------------------------------
@@ -44,7 +42,6 @@ export type TraverseMode = 'NODES' | 'EDGES';
 export type DistanceMetric = 'COSINE' | 'L2' | 'DOT';
 
 export interface TraverseOptions {
-  edgeType?: string;
   direction?: TraverseDirection;
   maxDepth?: number;
   mode?: TraverseMode;

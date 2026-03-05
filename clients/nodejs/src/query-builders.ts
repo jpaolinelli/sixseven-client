@@ -12,42 +12,6 @@ function escapeIdentifier(name: string): string {
   return '"' + name.replace(/"/g, '""') + '"';
 }
 
-/**
- * Escape a SQL string literal by wrapping in single quotes and doubling any
- * internal single quotes.
- */
-function escapeStringLiteral(value: string): string {
-  return "'" + value.replace(/'/g, "''") + "'";
-}
-
-/**
- * Format a value for inclusion in a SQL statement.
- */
-function formatValue(value: unknown): string {
-  if (value === null || value === undefined) {
-    return 'NULL';
-  }
-  if (typeof value === 'string') {
-    return escapeStringLiteral(value);
-  }
-  if (typeof value === 'number' || typeof value === 'bigint') {
-    return String(value);
-  }
-  if (typeof value === 'boolean') {
-    return value ? 'TRUE' : 'FALSE';
-  }
-  if (value instanceof Float32Array || value instanceof Float64Array) {
-    return escapeStringLiteral(serializeEmbedding(Array.from(value)));
-  }
-  if (Array.isArray(value)) {
-    return escapeStringLiteral(JSON.stringify(value));
-  }
-  if (typeof value === 'object') {
-    return escapeStringLiteral(JSON.stringify(value));
-  }
-  return escapeStringLiteral(String(value));
-}
-
 // ---------------------------------------------------------------------------
 // TRAVERSE query builder
 // ---------------------------------------------------------------------------
@@ -60,8 +24,9 @@ export interface TraverseQuery {
 /**
  * Build a TRAVERSE SQL statement.
  *
- * Example output:
- *   TRAVERSE "follows" FROM "users" WHERE id = $1 DIRECTION OUT MAX_DEPTH 3 MODE NODES FETCH
+ * Server syntax:
+ *   TRAVERSE edge FROM table($1) [DIRECTION IN|OUT|BOTH]
+ *     [MAX_DEPTH n] [MODE NODES|EDGES] [WHERE expr] [FETCH]
  */
 export function buildTraverse(
   edgeType: string,
@@ -77,8 +42,8 @@ export function buildTraverse(
     where,
   } = options;
 
-  let sql = `TRAVERSE ${escapeIdentifier(edgeType)} FROM ${escapeIdentifier(fromTable)} WHERE id = $1`;
   const values: unknown[] = [startId];
+  let sql = `TRAVERSE ${escapeIdentifier(edgeType)} FROM ${escapeIdentifier(fromTable)}($1)`;
 
   sql += ` DIRECTION ${direction}`;
 
@@ -88,12 +53,12 @@ export function buildTraverse(
 
   sql += ` MODE ${mode}`;
 
-  if (fetch) {
-    sql += ' FETCH';
-  }
-
   if (where) {
     sql += ` WHERE ${where}`;
+  }
+
+  if (fetch) {
+    sql += ' FETCH';
   }
 
   return { text: sql, values };
@@ -111,8 +76,8 @@ export interface NearestQuery {
 /**
  * Build a NEAREST SQL statement for vector similarity search.
  *
- * Example output:
- *   SELECT * FROM NEAREST("posts", "embedding", $1, 5)
+ * Server syntax:
+ *   NEAREST k FROM table.column TO $1 [WHERE expr] [USING COSINE|L2|DOT]
  */
 export function buildNearest(
   table: string,
@@ -123,25 +88,21 @@ export function buildNearest(
   const { k = 10, metric, where } = options;
 
   const values: unknown[] = [];
-  let queryParam: string;
 
   if (typeof query === 'string') {
     values.push(query);
-    queryParam = '$1';
   } else {
-    const embStr = serializeEmbedding(query);
-    values.push(embStr);
-    queryParam = '$1';
+    values.push(serializeEmbedding(query));
   }
 
-  let sql = `SELECT * FROM NEAREST(${escapeIdentifier(table)}, ${escapeIdentifier(column)}, ${queryParam}, ${k})`;
-
-  if (metric && metric !== 'COSINE') {
-    sql += ` USING ${metric}`;
-  }
+  let sql = `NEAREST ${k} FROM ${escapeIdentifier(table)}.${escapeIdentifier(column)} TO $1`;
 
   if (where) {
     sql += ` WHERE ${where}`;
+  }
+
+  if (metric && metric !== 'COSINE') {
+    sql += ` USING ${metric}`;
   }
 
   return { text: sql, values };
@@ -154,8 +115,8 @@ export function buildNearest(
 /**
  * Build a LINK SQL statement to create a graph edge.
  *
- * Example output:
- *   LINK "follows" FROM "users" WHERE id = $1 TO "users" WHERE id = $2 SET score = $3
+ * Server syntax:
+ *   LINK source_table($1) TO target_table($2) VIA edge_type [(prop = $3, ...)]
  */
 export function buildLink(
   edgeType: string,
@@ -166,16 +127,16 @@ export function buildLink(
   options: LinkOptions = {},
 ): { text: string; values: unknown[] } {
   const values: unknown[] = [fromId, toId];
-  let sql = `LINK ${escapeIdentifier(edgeType)} FROM ${escapeIdentifier(fromTable)} WHERE id = $1 TO ${escapeIdentifier(toTable)} WHERE id = $2`;
+  let sql = `LINK ${escapeIdentifier(fromTable)}($1) TO ${escapeIdentifier(toTable)}($2) VIA ${escapeIdentifier(edgeType)}`;
 
   const { properties } = options;
   if (properties && Object.keys(properties).length > 0) {
-    const setParts: string[] = [];
+    const propParts: string[] = [];
     for (const [key, val] of Object.entries(properties)) {
       values.push(val);
-      setParts.push(`${escapeIdentifier(key)} = $${values.length}`);
+      propParts.push(`${escapeIdentifier(key)} = $${values.length}`);
     }
-    sql += ' SET ' + setParts.join(', ');
+    sql += ' (' + propParts.join(', ') + ')';
   }
 
   return { text: sql, values };
@@ -188,8 +149,8 @@ export function buildLink(
 /**
  * Build an UNLINK SQL statement to remove a graph edge.
  *
- * Example output:
- *   UNLINK "follows" FROM "users" WHERE id = $1 TO "users" WHERE id = $2
+ * Server syntax:
+ *   UNLINK source_table($1) FROM target_table($2) VIA edge_type [WHERE expr]
  */
 export function buildUnlink(
   edgeType: string,
@@ -198,6 +159,6 @@ export function buildUnlink(
   toTable: string,
   toId: unknown,
 ): { text: string; values: unknown[] } {
-  const sql = `UNLINK ${escapeIdentifier(edgeType)} FROM ${escapeIdentifier(fromTable)} WHERE id = $1 TO ${escapeIdentifier(toTable)} WHERE id = $2`;
+  const sql = `UNLINK ${escapeIdentifier(fromTable)}($1) FROM ${escapeIdentifier(toTable)}($2) VIA ${escapeIdentifier(edgeType)}`;
   return { text: sql, values: [fromId, toId] };
 }

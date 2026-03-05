@@ -1,10 +1,10 @@
 import pg from 'pg';
 import { registerTypes } from './type-mapping';
+import { toQueryResult } from './result';
 import { buildTraverse, buildNearest, buildLink, buildUnlink } from './query-builders';
 import type {
   PoolConfig,
   QueryResult,
-  FieldInfo,
   TraverseOptions,
   NearestOptions,
   LinkOptions,
@@ -13,23 +13,6 @@ import { DEFAULTS as defaults } from './types';
 
 // Ensure custom type parsers are registered.
 registerTypes();
-
-/**
- * Convert a pg.QueryResult to our QueryResult shape.
- */
-function toQueryResult<T extends Record<string, unknown>>(pgResult: pg.QueryResult): QueryResult<T> {
-  const fields: FieldInfo[] = pgResult.fields.map((f) => ({
-    name: f.name,
-    dataTypeID: f.dataTypeID,
-  }));
-
-  return {
-    rows: pgResult.rows as T[],
-    fields,
-    rowCount: pgResult.rowCount ?? 0,
-    command: pgResult.command,
-  };
-}
 
 /**
  * A client checked out from the pool.
@@ -162,11 +145,6 @@ export class Pool {
   /** Total number of clients in the pool (active + idle). */
   get totalCount(): number {
     return this.pg.totalCount;
-  }
-
-  /** Number of clients currently checked out. */
-  get activeCount(): number {
-    return (this.pg as any).pool?._inUseObjectsCount ?? 0;
   }
 
   /** Number of idle clients in the pool. */

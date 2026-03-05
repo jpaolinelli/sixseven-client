@@ -10,10 +10,7 @@ vi.mock('pg', () => {
     connect = mockConnect;
     end = mockEnd;
     query = mockQuery;
-    _config: any;
-    constructor(config: any) {
-      this._config = config;
-    }
+    constructor(_config: any) {}
   }
 
   const mockTypes = {
@@ -28,15 +25,6 @@ vi.mock('pg', () => {
 });
 
 import { Client } from '../src/client';
-import pg from 'pg';
-
-function getLastPgConfig(): any {
-  // Access the stored config from the last constructed mock instance
-  const results = (pg.Client as any).prototype;
-  // Instead, we need to capture config another way since we use a class mock.
-  // We'll inspect by creating a new Client and checking the underlying pg instance.
-  return undefined;
-}
 
 describe('Client', () => {
   let client: Client;
@@ -120,6 +108,7 @@ describe('Client', () => {
     const [sql, values] = mockQuery.mock.calls[0];
     expect(sql).toContain('TRAVERSE');
     expect(sql).toContain('"follows"');
+    expect(sql).toContain('"users"($1)');
     expect(sql).toContain('MAX_DEPTH 2');
     expect(values).toEqual([1]);
     expect(result.rows).toEqual([{ __node: 2, __depth: 1 }]);
@@ -142,9 +131,9 @@ describe('Client', () => {
     });
 
     const [sql, values] = mockQuery.mock.calls[0];
-    expect(sql).toContain('NEAREST');
-    expect(sql).toContain('"posts"');
-    expect(sql).toContain(', 5)');
+    expect(sql).toContain('NEAREST 5');
+    expect(sql).toContain('"posts"."embedding"');
+    expect(sql).toContain('TO $1');
     expect(values).toEqual(['machine learning']);
     expect(result.rows[0]._distance).toBe(0.12);
   });
@@ -162,6 +151,7 @@ describe('Client', () => {
 
     const [sql, values] = mockQuery.mock.calls[0];
     expect(sql).toContain('LINK');
+    expect(sql).toContain('VIA "follows"');
     expect(values).toEqual([1, 2]);
   });
 
@@ -178,6 +168,7 @@ describe('Client', () => {
 
     const [sql, values] = mockQuery.mock.calls[0];
     expect(sql).toContain('UNLINK');
+    expect(sql).toContain('VIA "follows"');
     expect(values).toEqual([1, 2]);
   });
 });
