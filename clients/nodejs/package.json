@@ -1,0 +1,39 @@
+{
+  "name": "giodb",
+  "version": "0.1.0",
+  "description": "Node.js client library for SixSevenDB — hybrid relational, graph, and vector database",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "sixsevendb",
+    "giodb",
+    "database",
+    "graph",
+    "vector",
+    "embedding",
+    "postgresql",
+    "client"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "pg": "^8.13.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
