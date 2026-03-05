@@ -1,6 +1,7 @@
 export { Client } from './client';
 export { Pool, PoolClient } from './pool';
-export { parseEmbedding, serializeEmbedding, registerTypes } from './type-mapping';
+export { Connection } from './connection';
+export { parseEmbedding, serializeEmbedding, TypeOID, parseValue } from './type-parser';
 export {
   buildTraverse,
   buildNearest,
@@ -19,4 +20,4 @@ export type {
   NearestOptions,
   LinkOptions,
 } from './types';
-export { DEFAULTS, PG_OID_EMBEDDING } from './types';
+export { DEFAULTS } from './types';

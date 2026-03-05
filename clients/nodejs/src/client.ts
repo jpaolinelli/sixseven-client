@@ -1,35 +1,5 @@
-import pg from 'pg';
-import { registerTypes } from './type-mapping';
-import { toQueryResult } from './result';
-import { buildTraverse, buildNearest, buildLink, buildUnlink } from './query-builders';
-import type {
-  ConnectionConfig,
-  QueryResult,
-  TraverseOptions,
-  NearestOptions,
-  LinkOptions,
-} from './types';
-import { DEFAULTS as defaults } from './types';
-
-// Register custom type parsers on module load.
-registerTypes();
-
 /**
- * Resolve a ConnectionConfig into the shape expected by pg.Client.
- */
-function resolveConfig(config: ConnectionConfig = {}): pg.ClientConfig {
-  return {
-    host: config.host ?? defaults.host,
-    port: config.port ?? defaults.port,
-    user: config.user ?? defaults.user,
-    password: config.password,
-    database: config.database ?? defaults.database,
-  };
-}
-
-/**
- * A SixSevenDB client wrapping node-postgres with helpers for graph and vector
- * queries. Fully promise-based — use async/await.
+ * SixSevenDB client — single-connection API.
  *
  * ```ts
  * const client = new Client({ host: 'localhost', port: 6767 });
@@ -39,41 +9,47 @@ function resolveConfig(config: ConnectionConfig = {}): pg.ClientConfig {
  * await client.end();
  * ```
  */
+
+import { Connection } from './connection';
+import { buildTraverse, buildNearest, buildLink, buildUnlink } from './query-builders';
+import type {
+  ConnectionConfig,
+  QueryResult,
+  TraverseOptions,
+  NearestOptions,
+  LinkOptions,
+} from './types';
+
 export class Client {
-  private pg: pg.Client;
+  private connection: Connection;
 
   constructor(config?: ConnectionConfig) {
-    this.pg = new pg.Client(resolveConfig(config));
+    this.connection = new Connection(config);
   }
 
   /** Open the connection. */
   async connect(): Promise<void> {
-    await this.pg.connect();
+    await this.connection.connect();
   }
 
   /** Close the connection. */
   async end(): Promise<void> {
-    await this.pg.end();
+    await this.connection.end();
   }
 
-  /**
-   * Execute an arbitrary SQL query.
-   *
-   * Supports parameterized queries with `$1, $2, ...` placeholders.
-   */
+  /** Execute a SQL query. Supports `$1, $2, ...` parameter placeholders. */
   async query<T extends Record<string, unknown> = Record<string, unknown>>(
     text: string,
     values?: unknown[],
   ): Promise<QueryResult<T>> {
-    const pgResult = await this.pg.query(text, values);
-    return toQueryResult<T>(pgResult);
+    return this.connection.query<T>(text, values);
   }
 
   /**
-   * Execute a graph traversal starting from a node.
+   * Execute a graph traversal.
    *
    * ```ts
-   * const nodes = await client.traverse('follows', 'users', userId, {
+   * const result = await client.traverse('follows', 'users', userId, {
    *   direction: 'OUT',
    *   maxDepth: 3,
    *   mode: 'NODES',
@@ -92,10 +68,10 @@ export class Client {
   }
 
   /**
-   * Execute a vector similarity search using NEAREST.
+   * Execute a vector similarity search.
    *
    * ```ts
-   * const results = await client.nearest('posts', 'embedding', 'machine learning', {
+   * const result = await client.nearest('posts', 'embedding', 'machine learning', {
    *   k: 5,
    *   metric: 'COSINE',
    * });

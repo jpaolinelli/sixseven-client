@@ -3,7 +3,7 @@ import type {
   NearestOptions,
   LinkOptions,
 } from './types';
-import { serializeEmbedding } from './type-mapping';
+import { serializeEmbedding } from './type-parser';
 
 /**
  * Escape a SQL identifier (table name, column name) by double-quoting it.

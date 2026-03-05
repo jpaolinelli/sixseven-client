@@ -69,9 +69,3 @@ export const DEFAULTS = {
   user: 'sixseven',
   database: 'sixseven',
 } as const;
-
-// ---------------------------------------------------------------------------
-// Custom type OIDs (matches server pg_protocol.h)
-// ---------------------------------------------------------------------------
-
-export const PG_OID_EMBEDDING = 100000;

@@ -1,50 +1,12 @@
-import pg from 'pg';
-import { registerTypes } from './type-mapping';
-import { toQueryResult } from './result';
-import { buildTraverse, buildNearest, buildLink, buildUnlink } from './query-builders';
-import type {
-  PoolConfig,
-  QueryResult,
-  TraverseOptions,
-  NearestOptions,
-  LinkOptions,
-} from './types';
-import { DEFAULTS as defaults } from './types';
-
-// Ensure custom type parsers are registered.
-registerTypes();
-
 /**
- * A client checked out from the pool.
+ * SixSevenDB connection pool.
  *
- * Must call `release()` when done to return the connection to the pool.
- */
-export class PoolClient {
-  /** @internal */
-  constructor(private pgClient: pg.PoolClient) {}
-
-  /** Return this connection to the pool. */
-  release(err?: Error | boolean): void {
-    this.pgClient.release(err);
-  }
-
-  /** Execute a SQL query on this connection. */
-  async query<T extends Record<string, unknown> = Record<string, unknown>>(
-    text: string,
-    values?: unknown[],
-  ): Promise<QueryResult<T>> {
-    const pgResult = await this.pgClient.query(text, values);
-    return toQueryResult<T>(pgResult);
-  }
-}
-
-/**
- * A connection pool for SixSevenDB with configurable min/max connections.
+ * Manages a set of TCP connections and distributes queries across them.
  *
  * ```ts
- * const pool = new Pool({ host: 'localhost', port: 6767, min: 2, max: 10 });
+ * const pool = new Pool({ host: 'localhost', port: 6767, max: 10 });
  *
- * // Quick one-off query (auto-acquires and releases a connection):
+ * // One-off query (auto-acquires and releases):
  * const res = await pool.query('SELECT 1 AS n');
  *
  * // Or check out a dedicated connection:
@@ -55,44 +17,118 @@ export class PoolClient {
  * await pool.end();
  * ```
  */
+
+import { Connection } from './connection';
+import { buildTraverse, buildNearest, buildLink, buildUnlink } from './query-builders';
+import type {
+  ConnectionConfig,
+  PoolConfig,
+  QueryResult,
+  TraverseOptions,
+  NearestOptions,
+  LinkOptions,
+} from './types';
+import { DEFAULTS } from './types';
+
+// ---------------------------------------------------------------------------
+// PoolClient — a checked-out connection
+// ---------------------------------------------------------------------------
+
+/** A connection checked out from the pool. Call `release()` when done. */
+export class PoolClient {
+  private released = false;
+
+  /** @internal */
+  constructor(
+    private connection: Connection,
+    private releaseCallback: (conn: Connection, err?: Error | boolean) => void,
+  ) {}
+
+  /** Return this connection to the pool. Pass an error to destroy it instead. */
+  release(err?: Error | boolean): void {
+    if (this.released) return;
+    this.released = true;
+    this.releaseCallback(this.connection, err);
+  }
+
+  /** Execute a SQL query on this connection. */
+  async query<T extends Record<string, unknown> = Record<string, unknown>>(
+    text: string,
+    values?: unknown[],
+  ): Promise<QueryResult<T>> {
+    if (this.released) throw new Error('client already released');
+    return this.connection.query<T>(text, values);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Pool
+// ---------------------------------------------------------------------------
+
+interface Waiter {
+  resolve: (conn: Connection) => void;
+  reject: (err: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 export class Pool {
-  private pg: pg.Pool;
+  private idle: Connection[] = [];
+  private active = new Set<Connection>();
+  private waiters: Waiter[] = [];
+  private closed = false;
+
+  private readonly connConfig: ConnectionConfig;
+  private readonly max: number;
+  private readonly connectionTimeoutMillis: number;
 
   constructor(config?: PoolConfig) {
-    this.pg = new pg.Pool({
-      host: config?.host ?? defaults.host,
-      port: config?.port ?? defaults.port,
-      user: config?.user ?? defaults.user,
+    this.connConfig = {
+      host: config?.host ?? DEFAULTS.host,
+      port: config?.port ?? DEFAULTS.port,
+      user: config?.user ?? DEFAULTS.user,
       password: config?.password,
-      database: config?.database ?? defaults.database,
-      min: config?.min,
-      max: config?.max,
-      idleTimeoutMillis: config?.idleTimeoutMillis,
-      connectionTimeoutMillis: config?.connectionTimeoutMillis,
-    });
+      database: config?.database ?? DEFAULTS.database,
+    };
+    this.max = config?.max ?? 10;
+    this.connectionTimeoutMillis = config?.connectionTimeoutMillis ?? 30_000;
   }
 
   /** Check out a connection from the pool. Remember to call `release()`. */
   async connect(): Promise<PoolClient> {
-    const pgClient = await this.pg.connect();
-    return new PoolClient(pgClient);
+    const conn = await this.acquire();
+    return new PoolClient(conn, (c, err) => this.release(c, err));
   }
 
   /** Shut down the pool and close all connections. */
   async end(): Promise<void> {
-    await this.pg.end();
+    this.closed = true;
+
+    for (const w of this.waiters) {
+      clearTimeout(w.timer);
+      w.reject(new Error('pool is ending'));
+    }
+    this.waiters = [];
+
+    const all = [...this.idle, ...this.active];
+    this.idle = [];
+    this.active.clear();
+    await Promise.all(all.map((c) => c.end()));
   }
 
   /**
-   * Execute a query using a connection from the pool.
+   * Execute a query using a pooled connection.
    * The connection is automatically acquired and released.
    */
   async query<T extends Record<string, unknown> = Record<string, unknown>>(
     text: string,
     values?: unknown[],
   ): Promise<QueryResult<T>> {
-    const pgResult = await this.pg.query(text, values);
-    return toQueryResult<T>(pgResult);
+    const client = await this.connect();
+    try {
+      return await client.query<T>(text, values);
+    } finally {
+      client.release();
+    }
   }
 
   /** Execute a graph traversal. See {@link Client.traverse}. */
@@ -142,18 +178,73 @@ export class Pool {
     return this.query(q.text, q.values);
   }
 
-  /** Total number of clients in the pool (active + idle). */
+  /** Total number of connections (active + idle). */
   get totalCount(): number {
-    return this.pg.totalCount;
+    return this.active.size + this.idle.length;
   }
 
-  /** Number of idle clients in the pool. */
+  /** Number of idle connections. */
   get idleCount(): number {
-    return this.pg.idleCount;
+    return this.idle.length;
   }
 
-  /** Number of queued connect requests waiting for a free client. */
+  /** Number of queued connect requests waiting for a free connection. */
   get waitingCount(): number {
-    return this.pg.waitingCount;
+    return this.waiters.length;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Internals
+  // ---------------------------------------------------------------------------
+
+  private async acquire(): Promise<Connection> {
+    if (this.closed) throw new Error('pool is closed');
+
+    // Reuse an idle connection
+    if (this.idle.length > 0) {
+      const conn = this.idle.pop()!;
+      this.active.add(conn);
+      return conn;
+    }
+
+    // Create a new connection if under the limit
+    if (this.active.size < this.max) {
+      const conn = new Connection(this.connConfig);
+      await conn.connect();
+      this.active.add(conn);
+      return conn;
+    }
+
+    // Wait for a connection to be released
+    return new Promise<Connection>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const idx = this.waiters.findIndex((w) => w.resolve === resolve);
+        if (idx >= 0) this.waiters.splice(idx, 1);
+        reject(new Error('connection pool timeout'));
+      }, this.connectionTimeoutMillis);
+
+      this.waiters.push({ resolve, reject, timer });
+    });
+  }
+
+  private release(conn: Connection, err?: Error | boolean): void {
+    this.active.delete(conn);
+
+    if (err || this.closed) {
+      conn.end().catch(() => {});
+      return;
+    }
+
+    // Hand to a waiting caller
+    if (this.waiters.length > 0) {
+      const w = this.waiters.shift()!;
+      clearTimeout(w.timer);
+      this.active.add(conn);
+      w.resolve(conn);
+      return;
+    }
+
+    // Return to idle pool
+    this.idle.push(conn);
   }
 }

@@ -1,56 +1,44 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const mockQuery = vi.fn();
 const mockConnect = vi.fn();
 const mockEnd = vi.fn();
+const mockQuery = vi.fn();
 
-// Mock pg before importing our module
-vi.mock('pg', () => {
-  class MockClient {
+vi.mock('../src/connection', () => {
+  class MockConnection {
     connect = mockConnect;
     end = mockEnd;
     query = mockQuery;
-    constructor(_config: any) {}
+    constructor(_config?: unknown) {}
   }
-
-  const mockTypes = {
-    setTypeParser: vi.fn(),
-  };
-
-  return {
-    default: { Client: MockClient, types: mockTypes },
-    Client: MockClient,
-    types: mockTypes,
-  };
+  return { Connection: MockConnection };
 });
 
 import { Client } from '../src/client';
 
 describe('Client', () => {
-  let client: Client;
-
   beforeEach(() => {
-    mockQuery.mockReset();
     mockConnect.mockReset();
     mockEnd.mockReset();
+    mockQuery.mockReset();
   });
 
-  it('connect() delegates to pg.Client.connect()', async () => {
-    client = new Client({ host: '127.0.0.1', port: 6767 });
+  it('connect() delegates to Connection.connect()', async () => {
+    const client = new Client({ host: '127.0.0.1', port: 6767 });
     mockConnect.mockResolvedValue(undefined);
     await client.connect();
     expect(mockConnect).toHaveBeenCalledOnce();
   });
 
-  it('end() delegates to pg.Client.end()', async () => {
-    client = new Client();
+  it('end() delegates to Connection.end()', async () => {
+    const client = new Client();
     mockEnd.mockResolvedValue(undefined);
     await client.end();
     expect(mockEnd).toHaveBeenCalledOnce();
   });
 
   it('query() returns a properly shaped QueryResult', async () => {
-    client = new Client();
+    const client = new Client();
     mockQuery.mockResolvedValue({
       rows: [{ id: 1, name: 'Alice' }],
       fields: [
@@ -72,7 +60,7 @@ describe('Client', () => {
   });
 
   it('query() forwards parameters', async () => {
-    client = new Client();
+    const client = new Client();
     mockQuery.mockResolvedValue({
       rows: [],
       fields: [],
@@ -88,7 +76,7 @@ describe('Client', () => {
   });
 
   it('traverse() builds and executes a TRAVERSE query', async () => {
-    client = new Client();
+    const client = new Client();
     mockQuery.mockResolvedValue({
       rows: [{ __node: 2, __depth: 1 }],
       fields: [
@@ -115,7 +103,7 @@ describe('Client', () => {
   });
 
   it('nearest() builds and executes a NEAREST query', async () => {
-    client = new Client();
+    const client = new Client();
     mockQuery.mockResolvedValue({
       rows: [{ id: 5, _distance: 0.12 }],
       fields: [
@@ -139,7 +127,7 @@ describe('Client', () => {
   });
 
   it('link() builds and executes a LINK query', async () => {
-    client = new Client();
+    const client = new Client();
     mockQuery.mockResolvedValue({
       rows: [],
       fields: [],
@@ -156,7 +144,7 @@ describe('Client', () => {
   });
 
   it('unlink() builds and executes an UNLINK query', async () => {
-    client = new Client();
+    const client = new Client();
     mockQuery.mockResolvedValue({
       rows: [],
       fields: [],
