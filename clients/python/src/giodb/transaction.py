@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .query_builders import escape_identifier
+
 
 class Savepoint:
     """A savepoint within a transaction, usable as a context manager."""
@@ -21,9 +23,9 @@ class Savepoint:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if exc_type is not None:
-            self._connection.query(f"ROLLBACK TO SAVEPOINT {self.name}")
+            self._connection.query(f"ROLLBACK TO SAVEPOINT {escape_identifier(self.name)}")
         else:
-            self._connection.query(f"RELEASE SAVEPOINT {self.name}")
+            self._connection.query(f"RELEASE SAVEPOINT {escape_identifier(self.name)}")
         return False
 
 
@@ -39,12 +41,12 @@ class Transaction:
 
     def savepoint(self, name: str) -> Savepoint:
         """Create a savepoint within this transaction."""
-        self._connection.query(f"SAVEPOINT {name}")
+        self._connection.query(f"SAVEPOINT {escape_identifier(name)}")
         return Savepoint(self._connection, name)
 
     def rollback_to(self, name: str) -> None:
         """Explicitly roll back to a named savepoint."""
-        self._connection.query(f"ROLLBACK TO SAVEPOINT {name}")
+        self._connection.query(f"ROLLBACK TO SAVEPOINT {escape_identifier(name)}")
 
     def commit(self) -> None:
         """Explicitly commit the transaction."""
@@ -82,9 +84,9 @@ class AsyncSavepoint:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if exc_type is not None:
-            await self._connection.query(f"ROLLBACK TO SAVEPOINT {self.name}")
+            await self._connection.query(f"ROLLBACK TO SAVEPOINT {escape_identifier(self.name)}")
         else:
-            await self._connection.query(f"RELEASE SAVEPOINT {self.name}")
+            await self._connection.query(f"RELEASE SAVEPOINT {escape_identifier(self.name)}")
         return False
 
 
@@ -97,12 +99,12 @@ class AsyncTransaction:
 
     async def savepoint(self, name: str) -> AsyncSavepoint:
         """Create a savepoint within this transaction."""
-        await self._connection.query(f"SAVEPOINT {name}")
+        await self._connection.query(f"SAVEPOINT {escape_identifier(name)}")
         return AsyncSavepoint(self._connection, name)
 
     async def rollback_to(self, name: str) -> None:
         """Explicitly roll back to a named savepoint."""
-        await self._connection.query(f"ROLLBACK TO SAVEPOINT {name}")
+        await self._connection.query(f"ROLLBACK TO SAVEPOINT {escape_identifier(name)}")
 
     async def commit(self) -> None:
         if not self._finished:

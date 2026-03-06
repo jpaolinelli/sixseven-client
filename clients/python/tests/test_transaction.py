@@ -85,7 +85,7 @@ class TestSavepoint:
         with sp:
             conn.query("INSERT INTO t VALUES (1)")
 
-        conn.query.assert_any_call("RELEASE SAVEPOINT sp1")
+        conn.query.assert_any_call('RELEASE SAVEPOINT "sp1"')
 
     def test_rollback_on_exception(self):
         conn = _make_mock_conn()
@@ -95,7 +95,7 @@ class TestSavepoint:
             with sp:
                 raise ValueError("test")
 
-        conn.query.assert_any_call("ROLLBACK TO SAVEPOINT sp1")
+        conn.query.assert_any_call('ROLLBACK TO SAVEPOINT "sp1"')
 
     def test_nested_savepoints(self):
         conn = _make_mock_conn()
@@ -107,15 +107,15 @@ class TestSavepoint:
                 pass  # Clean exit releases sp1
 
         calls = [c[0][0] for c in conn.query.call_args_list]
-        assert "SAVEPOINT sp1" in calls
-        assert "RELEASE SAVEPOINT sp1" in calls
+        assert 'SAVEPOINT "sp1"' in calls
+        assert 'RELEASE SAVEPOINT "sp1"' in calls
         assert "COMMIT" in calls
 
     def test_rollback_to(self):
         conn = _make_mock_conn()
         txn = Transaction(conn)
         txn.rollback_to("sp1")
-        conn.query.assert_called_with("ROLLBACK TO SAVEPOINT sp1")
+        conn.query.assert_called_with('ROLLBACK TO SAVEPOINT "sp1"')
 
 
 class TestAsyncTransaction:
@@ -160,8 +160,8 @@ class TestAsyncTransaction:
         async with sp:
             pass
 
-        conn.query.assert_any_call("SAVEPOINT sp1")
-        conn.query.assert_any_call("RELEASE SAVEPOINT sp1")
+        conn.query.assert_any_call('SAVEPOINT "sp1"')
+        conn.query.assert_any_call('RELEASE SAVEPOINT "sp1"')
 
 
 class TestAsyncSavepoint:
@@ -175,4 +175,4 @@ class TestAsyncSavepoint:
             async with sp:
                 raise ValueError("test")
 
-        conn.query.assert_any_call("ROLLBACK TO SAVEPOINT sp1")
+        conn.query.assert_any_call('ROLLBACK TO SAVEPOINT "sp1"')

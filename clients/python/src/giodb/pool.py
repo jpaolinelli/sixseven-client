@@ -15,7 +15,7 @@ import numpy as np
 from .connection import Connection
 from .exceptions import InterfaceError, OperationalError
 from .transaction import Transaction
-from .query_builders import build_link, build_nearest, build_traverse, build_unlink
+from .query_builders import build_link, build_nearest, build_traverse, build_unlink, escape_identifier
 from .types import (
     ConnectionConfig,
     LinkOptions,
@@ -280,11 +280,11 @@ class _PoolTransaction:
         return self._client.query(text, values)
 
     def savepoint(self, name: str) -> _PoolSavepoint:
-        self._client.query(f"SAVEPOINT {name}")
+        self._client.query(f"SAVEPOINT {escape_identifier(name)}")
         return _PoolSavepoint(self._client, name)
 
     def rollback_to(self, name: str) -> None:
-        self._client.query(f"ROLLBACK TO SAVEPOINT {name}")
+        self._client.query(f"ROLLBACK TO SAVEPOINT {escape_identifier(name)}")
 
     def __enter__(self):
         return self
@@ -314,7 +314,7 @@ class _PoolSavepoint:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if exc_type is not None:
-            self._client.query(f"ROLLBACK TO SAVEPOINT {self.name}")
+            self._client.query(f"ROLLBACK TO SAVEPOINT {escape_identifier(self.name)}")
         else:
-            self._client.query(f"RELEASE SAVEPOINT {self.name}")
+            self._client.query(f"RELEASE SAVEPOINT {escape_identifier(self.name)}")
         return False
