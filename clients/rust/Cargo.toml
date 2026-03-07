@@ -1,0 +1,28 @@
+[package]
+name = "sixsevendb"
+version = "0.1.0"
+edition = "2021"
+description = "Async Rust client library for SixSevenDB"
+license = "MIT"
+repository = "https://github.com/sixsevendb/sixsevendb-rs"
+keywords = ["database", "graph", "vector", "sql", "async"]
+categories = ["database"]
+
+[dependencies]
+tokio = { version = "1", features = ["net", "io-util", "rt", "sync", "macros"] }
+bb8 = "0.9"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+rust_decimal = "1"
+url = "2"
+thiserror = "2"
+rand = "0.9"
+sha2 = "0.10"
+hmac = "0.12"
+pbkdf2 = { version = "0.12", features = ["hmac"] }
+md-5 = "0.10"
+base64 = "0.22"
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
