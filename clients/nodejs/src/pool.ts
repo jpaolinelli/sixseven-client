@@ -76,10 +76,13 @@ export class Pool {
   private active = new Set<Connection>();
   private waiters: Waiter[] = [];
   private closed = false;
+  private idleTimers = new Map<Connection, ReturnType<typeof setTimeout>>();
 
   private readonly connConfig: ConnectionConfig;
   private readonly max: number;
+  private readonly min: number;
   private readonly connectionTimeoutMillis: number;
+  private readonly idleTimeoutMillis: number;
 
   constructor(config?: PoolConfig) {
     this.connConfig = {
@@ -90,7 +93,13 @@ export class Pool {
       database: config?.database ?? DEFAULTS.database,
     };
     this.max = config?.max ?? 10;
+    this.min = Math.min(config?.min ?? 0, this.max);
     this.connectionTimeoutMillis = config?.connectionTimeoutMillis ?? 30_000;
+    this.idleTimeoutMillis = config?.idleTimeoutMillis ?? 0;
+
+    if (this.min > 0) {
+      this.warmPool().catch(() => {});
+    }
   }
 
   /** Check out a connection from the pool. Remember to call `release()`. */
@@ -108,6 +117,11 @@ export class Pool {
       w.reject(new Error('pool is ending'));
     }
     this.waiters = [];
+
+    for (const timer of this.idleTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.idleTimers.clear();
 
     const all = [...this.idle, ...this.active];
     this.idle = [];
@@ -203,6 +217,11 @@ export class Pool {
     // Reuse an idle connection
     if (this.idle.length > 0) {
       const conn = this.idle.pop()!;
+      const timer = this.idleTimers.get(conn);
+      if (timer) {
+        clearTimeout(timer);
+        this.idleTimers.delete(conn);
+      }
       this.active.add(conn);
       return conn;
     }
@@ -246,5 +265,49 @@ export class Pool {
 
     // Return to idle pool
     this.idle.push(conn);
+    this.scheduleIdleTimeout(conn);
+  }
+
+  private scheduleIdleTimeout(conn: Connection): void {
+    if (this.idleTimeoutMillis <= 0) return;
+
+    const timer = setTimeout(() => {
+      this.evictIdle(conn);
+    }, this.idleTimeoutMillis);
+
+    // Don't let idle timers keep the Node.js process alive
+    if (timer && typeof timer === 'object' && 'unref' in timer) {
+      timer.unref();
+    }
+
+    this.idleTimers.set(conn, timer);
+  }
+
+  private evictIdle(conn: Connection): void {
+    this.idleTimers.delete(conn);
+
+    const idx = this.idle.indexOf(conn);
+    if (idx === -1) return;
+
+    // Don't evict below the minimum idle count
+    if (this.idle.length <= this.min) return;
+
+    this.idle.splice(idx, 1);
+    conn.end().catch(() => {});
+  }
+
+  private async warmPool(): Promise<void> {
+    const needed = this.min - this.totalCount;
+    for (let i = 0; i < needed; i++) {
+      if (this.closed) break;
+      try {
+        const conn = new Connection(this.connConfig);
+        await conn.connect();
+        this.idle.push(conn);
+        this.scheduleIdleTimeout(conn);
+      } catch {
+        // Pre-warming is best-effort; ignore connection failures
+      }
+    }
   }
 }
