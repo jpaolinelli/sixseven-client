@@ -53,6 +53,14 @@ pub mod query_builders;
 pub mod transaction;
 pub mod types;
 
+// QA adversarial test modules
+#[cfg(test)]
+mod qa_gdb_50_types;
+#[cfg(test)]
+mod qa_gdb_50_query_builders;
+#[cfg(test)]
+mod qa_gdb_50_protocol_auth;
+
 // Re-export primary types at crate root
 pub use config::Config;
 pub use connection::{Connection, QueryResult};
