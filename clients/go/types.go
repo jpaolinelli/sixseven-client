@@ -1,6 +1,7 @@
 package sixsevendb
 
 import (
+	"database/sql/driver"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -39,9 +40,51 @@ const (
 )
 
 // Embedding represents a vector embedding as a slice of float32 values.
+// It implements sql.Scanner and driver.Valuer for direct use with database/sql.
 type Embedding []float32
 
+// Scan implements the sql.Scanner interface for Embedding.
+func (e *Embedding) Scan(src interface{}) error {
+	if src == nil {
+		*e = nil
+		return nil
+	}
+	switch v := src.(type) {
+	case string:
+		parsed, err := ParseEmbedding(v)
+		if err != nil {
+			return err
+		}
+		*e = parsed
+		return nil
+	case []byte:
+		parsed, err := ParseEmbedding(string(v))
+		if err != nil {
+			return err
+		}
+		*e = parsed
+		return nil
+	case Embedding:
+		*e = v
+		return nil
+	case []float32:
+		*e = Embedding(v)
+		return nil
+	default:
+		return fmt.Errorf("sixsevendb: cannot scan %T into Embedding", src)
+	}
+}
+
+// Value implements the driver.Valuer interface for Embedding.
+func (e Embedding) Value() (driver.Value, error) {
+	if e == nil {
+		return nil, nil
+	}
+	return SerializeEmbedding(e), nil
+}
+
 // Interval represents a time interval with separate year/month/day/time components.
+// It implements sql.Scanner and driver.Valuer for direct use with database/sql.
 type Interval struct {
 	Years   int
 	Months  int
@@ -49,6 +92,40 @@ type Interval struct {
 	Hours   int
 	Minutes int
 	Seconds float64
+}
+
+// Scan implements the sql.Scanner interface for Interval.
+func (i *Interval) Scan(src interface{}) error {
+	if src == nil {
+		*i = Interval{}
+		return nil
+	}
+	switch v := src.(type) {
+	case string:
+		parsed, err := parseInterval(v)
+		if err != nil {
+			return err
+		}
+		*i = parsed
+		return nil
+	case []byte:
+		parsed, err := parseInterval(string(v))
+		if err != nil {
+			return err
+		}
+		*i = parsed
+		return nil
+	case Interval:
+		*i = v
+		return nil
+	default:
+		return fmt.Errorf("sixsevendb: cannot scan %T into Interval", src)
+	}
+}
+
+// Value implements the driver.Valuer interface for Interval.
+func (i Interval) Value() (driver.Value, error) {
+	return i.String(), nil
 }
 
 // String returns the interval in a human-readable format.

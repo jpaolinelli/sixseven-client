@@ -7,6 +7,10 @@ import (
 
 const protocolVersion = 196608 // 3 << 16, PostgreSQL v3
 
+// nullValue is a sentinel string used to represent SQL NULL in the bind protocol.
+// This distinguishes NULL from an actual empty string parameter.
+const nullValue = "\x00NULL\x00"
+
 // Backend message type bytes.
 const (
 	msgAuthentication    byte = 'R'
@@ -121,8 +125,8 @@ func buildBindMessage(values []string, portalName, statementName string) []byte 
 
 	var paramData []byte
 	for _, val := range values {
-		if val == "" {
-			// Use NULL for empty values — callers encode nil as ""
+		if val == nullValue {
+			// NULL parameter: length -1 means SQL NULL in PG protocol
 			paramData = binary.BigEndian.AppendUint32(paramData, 0xFFFFFFFF)
 		} else {
 			valBytes := []byte(val)

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -432,10 +433,8 @@ func parseCommandTag(tag string) string {
 func parseRowCount(tag string) int64 {
 	parts := strings.Split(tag, " ")
 	if len(parts) >= 2 {
-		n, err := fmt.Sscanf(parts[len(parts)-1], "%d", new(int64))
-		if err == nil && n == 1 {
-			var count int64
-			fmt.Sscanf(parts[len(parts)-1], "%d", &count)
+		count, err := strconv.ParseInt(parts[len(parts)-1], 10, 64)
+		if err == nil {
 			return count
 		}
 	}

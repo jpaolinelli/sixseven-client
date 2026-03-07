@@ -128,14 +128,16 @@ func TestFormatArg(t *testing.T) {
 		input interface{}
 		want  string
 	}{
-		{nil, ""},
+		{nil, nullValue},
 		{"hello", "hello"},
+		{"", ""},
 		{int64(42), "42"},
 		{float64(3.14), "3.14"},
 		{true, "true"},
 		{false, "false"},
 		{Embedding{0.1, 0.2}, "[0.1,0.2]"},
 		{[]float32{1.0, 2.0}, "[1,2]"},
+		{Interval{Days: 5}, "5 days"},
 	}
 	for _, tt := range tests {
 		got := formatArg(tt.input)

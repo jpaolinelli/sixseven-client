@@ -1,6 +1,7 @@
 package sixsevendb
 
 import (
+	"database/sql/driver"
 	"math"
 	"testing"
 	"time"
@@ -326,3 +327,174 @@ func TestIntervalString(t *testing.T) {
 		}
 	}
 }
+
+// --- Embedding sql.Scanner / driver.Valuer tests ---
+
+func TestEmbeddingScanString(t *testing.T) {
+	var e Embedding
+	err := e.Scan("[1.0,2.0,3.0]")
+	if err != nil {
+		t.Fatalf("Scan error: %v", err)
+	}
+	if len(e) != 3 {
+		t.Fatalf("len = %d, want 3", len(e))
+	}
+	if math.Abs(float64(e[0]-1.0)) > 0.001 {
+		t.Errorf("e[0] = %f, want 1.0", e[0])
+	}
+}
+
+func TestEmbeddingScanBytes(t *testing.T) {
+	var e Embedding
+	err := e.Scan([]byte("[4.0,5.0]"))
+	if err != nil {
+		t.Fatalf("Scan error: %v", err)
+	}
+	if len(e) != 2 {
+		t.Fatalf("len = %d, want 2", len(e))
+	}
+}
+
+func TestEmbeddingScanNil(t *testing.T) {
+	e := Embedding{1.0}
+	err := e.Scan(nil)
+	if err != nil {
+		t.Fatalf("Scan error: %v", err)
+	}
+	if e != nil {
+		t.Errorf("expected nil, got %v", e)
+	}
+}
+
+func TestEmbeddingScanEmbedding(t *testing.T) {
+	var e Embedding
+	src := Embedding{7.0, 8.0}
+	err := e.Scan(src)
+	if err != nil {
+		t.Fatalf("Scan error: %v", err)
+	}
+	if len(e) != 2 || e[0] != 7.0 {
+		t.Errorf("expected [7.0,8.0], got %v", e)
+	}
+}
+
+func TestEmbeddingScanFloat32Slice(t *testing.T) {
+	var e Embedding
+	err := e.Scan([]float32{9.0, 10.0})
+	if err != nil {
+		t.Fatalf("Scan error: %v", err)
+	}
+	if len(e) != 2 || e[0] != 9.0 {
+		t.Errorf("expected [9.0,10.0], got %v", e)
+	}
+}
+
+func TestEmbeddingScanUnsupported(t *testing.T) {
+	var e Embedding
+	err := e.Scan(42)
+	if err == nil {
+		t.Error("expected error for unsupported type")
+	}
+}
+
+func TestEmbeddingValue(t *testing.T) {
+	e := Embedding{0.1, 0.2, 0.3}
+	val, err := e.Value()
+	if err != nil {
+		t.Fatalf("Value error: %v", err)
+	}
+	s, ok := val.(string)
+	if !ok {
+		t.Fatalf("expected string, got %T", val)
+	}
+	if s != "[0.1,0.2,0.3]" {
+		t.Errorf("Value = %q, want %q", s, "[0.1,0.2,0.3]")
+	}
+}
+
+func TestEmbeddingValueNil(t *testing.T) {
+	var e Embedding
+	val, err := e.Value()
+	if err != nil {
+		t.Fatalf("Value error: %v", err)
+	}
+	if val != nil {
+		t.Errorf("expected nil, got %v", val)
+	}
+}
+
+// Verify Embedding implements the interfaces at compile time.
+var _ driver.Valuer = Embedding{}
+
+// --- Interval sql.Scanner / driver.Valuer tests ---
+
+func TestIntervalScanString(t *testing.T) {
+	var iv Interval
+	err := iv.Scan("2 days 03:00:00")
+	if err != nil {
+		t.Fatalf("Scan error: %v", err)
+	}
+	if iv.Days != 2 || iv.Hours != 3 {
+		t.Errorf("got %+v, want Days=2 Hours=3", iv)
+	}
+}
+
+func TestIntervalScanBytes(t *testing.T) {
+	var iv Interval
+	err := iv.Scan([]byte("01:30:00"))
+	if err != nil {
+		t.Fatalf("Scan error: %v", err)
+	}
+	if iv.Hours != 1 || iv.Minutes != 30 {
+		t.Errorf("got %+v, want Hours=1 Minutes=30", iv)
+	}
+}
+
+func TestIntervalScanNil(t *testing.T) {
+	iv := Interval{Days: 5}
+	err := iv.Scan(nil)
+	if err != nil {
+		t.Fatalf("Scan error: %v", err)
+	}
+	if iv.Days != 0 {
+		t.Errorf("expected zero Interval, got %+v", iv)
+	}
+}
+
+func TestIntervalScanInterval(t *testing.T) {
+	var iv Interval
+	src := Interval{Years: 2, Months: 6}
+	err := iv.Scan(src)
+	if err != nil {
+		t.Fatalf("Scan error: %v", err)
+	}
+	if iv.Years != 2 || iv.Months != 6 {
+		t.Errorf("got %+v, want Years=2 Months=6", iv)
+	}
+}
+
+func TestIntervalScanUnsupported(t *testing.T) {
+	var iv Interval
+	err := iv.Scan(42)
+	if err == nil {
+		t.Error("expected error for unsupported type")
+	}
+}
+
+func TestIntervalValue(t *testing.T) {
+	iv := Interval{Days: 3, Hours: 12}
+	val, err := iv.Value()
+	if err != nil {
+		t.Fatalf("Value error: %v", err)
+	}
+	s, ok := val.(string)
+	if !ok {
+		t.Fatalf("expected string, got %T", val)
+	}
+	if s != "3 days 12:00:00.000" {
+		t.Errorf("Value = %q, want %q", s, "3 days 12:00:00.000")
+	}
+}
+
+// Verify Interval implements the interfaces at compile time.
+var _ driver.Valuer = Interval{}

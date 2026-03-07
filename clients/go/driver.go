@@ -291,7 +291,7 @@ func namedValues(args []driver.Value) []driver.NamedValue {
 // formatArg converts a driver value to string for the wire protocol.
 func formatArg(v interface{}) string {
 	if v == nil {
-		return ""
+		return nullValue
 	}
 	switch val := v.(type) {
 	case string:
@@ -311,6 +311,8 @@ func formatArg(v interface{}) string {
 		return SerializeEmbedding(val)
 	case []float32:
 		return SerializeEmbedding(Embedding(val))
+	case Interval:
+		return val.String()
 	default:
 		return fmt.Sprintf("%v", val)
 	}
