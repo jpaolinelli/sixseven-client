@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>SixSevenDB.Client</RootNamespace>
+    <AssemblyName>SixSevenDB.Client</AssemblyName>
+
+    <!-- NuGet package metadata -->
+    <PackageId>SixSevenDB.Client</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>SixSevenDB</Authors>
+    <Description>ADO.NET provider for SixSevenDB — a graph-relational database with vector search</Description>
+    <PackageTags>sixsevendb;database;adonet;graph;vector;embedding</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="SixSevenDB.Client.Tests" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>SixSevenDB.EntityFrameworkCore</RootNamespace>
+    <AssemblyName>SixSevenDB.EntityFrameworkCore</AssemblyName>
+
+    <!-- NuGet package metadata -->
+    <PackageId>SixSevenDB.EntityFrameworkCore</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>SixSevenDB</Authors>
+    <Description>Entity Framework Core provider for SixSevenDB — a graph-relational database with vector search</Description>
+    <PackageTags>sixsevendb;database;efcore;entityframework;graph;vector;embedding</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="9.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../SixSevenDB.Client/SixSevenDB.Client.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="SixSevenDB.EntityFrameworkCore.Tests" />
+  </ItemGroup>
+
+</Project>
