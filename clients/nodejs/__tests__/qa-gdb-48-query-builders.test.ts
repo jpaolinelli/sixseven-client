@@ -55,21 +55,19 @@ describe('QA: buildTraverse adversarial', () => {
     expect(q.text).toContain('"users""; DROP TABLE users; --"');
   });
 
-  it('should handle maxDepth of 0', () => {
-    const q = buildTraverse('follows', 'users', 1, { maxDepth: 0 });
-    expect(q.text).toContain('MAX_DEPTH 0');
+  it('should reject maxDepth of 0', () => {
+    expect(() => buildTraverse('follows', 'users', 1, { maxDepth: 0 }))
+      .toThrow('maxDepth must be a positive integer');
   });
 
-  it('should handle negative maxDepth (no validation)', () => {
-    // BUG: negative maxDepth generates invalid SQL but is not validated
-    const q = buildTraverse('follows', 'users', 1, { maxDepth: -1 });
-    expect(q.text).toContain('MAX_DEPTH -1');
+  it('should reject negative maxDepth', () => {
+    expect(() => buildTraverse('follows', 'users', 1, { maxDepth: -1 }))
+      .toThrow('maxDepth must be a positive integer');
   });
 
-  it('should handle floating-point maxDepth (no validation)', () => {
-    // BUG: non-integer maxDepth generates invalid SQL but is not validated
-    const q = buildTraverse('follows', 'users', 1, { maxDepth: 2.5 });
-    expect(q.text).toContain('MAX_DEPTH 2.5');
+  it('should reject floating-point maxDepth', () => {
+    expect(() => buildTraverse('follows', 'users', 1, { maxDepth: 2.5 }))
+      .toThrow('maxDepth must be a positive integer');
   });
 
   it('should handle where clause with SQL injection attempt', () => {
@@ -113,15 +111,14 @@ describe('QA: buildTraverse adversarial', () => {
 // ---------------------------------------------------------------------------
 
 describe('QA: buildNearest adversarial', () => {
-  it('should handle k=0', () => {
-    const q = buildNearest('posts', 'embedding', 'test', { k: 0 });
-    expect(q.text).toContain('NEAREST 0');
+  it('should reject k=0', () => {
+    expect(() => buildNearest('posts', 'embedding', 'test', { k: 0 }))
+      .toThrow('k must be a positive integer');
   });
 
-  it('should handle negative k (no validation)', () => {
-    // BUG: negative k generates invalid SQL but is not validated
-    const q = buildNearest('posts', 'embedding', 'test', { k: -5 });
-    expect(q.text).toContain('NEAREST -5');
+  it('should reject negative k', () => {
+    expect(() => buildNearest('posts', 'embedding', 'test', { k: -5 }))
+      .toThrow('k must be a positive integer');
   });
 
   it('should handle very large k', () => {

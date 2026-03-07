@@ -31,31 +31,39 @@ internal sealed class ConnectionPool : IAsyncDisposable
             throw new SixSevenDbException("Connection pool timeout — all connections are in use");
         }
 
-        // Try to reuse an idle connection
-        while (_idle.TryDequeue(out var idle))
+        try
         {
-            if (idle.IsConnected)
+            // Try to reuse an idle connection
+            while (_idle.TryDequeue(out var idle))
             {
-                _active.TryAdd(idle, 0);
-                return idle;
+                if (idle.IsConnected)
+                {
+                    _active.TryAdd(idle, 0);
+                    return idle;
+                }
+                // Dead connection — discard
+                Interlocked.Decrement(ref _totalCount);
+                await idle.DisposeAsync();
             }
-            // Dead connection — discard
-            Interlocked.Decrement(ref _totalCount);
-            await idle.DisposeAsync();
-        }
 
-        // Create new connection
-        var conn = new RawConnection(
-            _config.Host,
-            _config.Port,
-            _config.Username,
-            _config.Password,
-            _config.Database
-        );
-        await conn.ConnectAsync(cancellationToken);
-        Interlocked.Increment(ref _totalCount);
-        _active.TryAdd(conn, 0);
-        return conn;
+            // Create new connection
+            var conn = new RawConnection(
+                _config.Host,
+                _config.Port,
+                _config.Username,
+                _config.Password,
+                _config.Database
+            );
+            await conn.ConnectAsync(cancellationToken);
+            Interlocked.Increment(ref _totalCount);
+            _active.TryAdd(conn, 0);
+            return conn;
+        }
+        catch
+        {
+            _semaphore.Release();
+            throw;
+        }
     }
 
     public async ValueTask ReleaseAsync(RawConnection connection, bool destroy = false)

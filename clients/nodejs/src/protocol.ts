@@ -7,7 +7,7 @@
  *   Startup message has no type byte: 4-byte length + payload
  */
 
-import { createHash } from 'crypto';
+import { createHash, createHmac, pbkdf2Sync, randomBytes } from 'crypto';
 
 // ---------------------------------------------------------------------------
 // Frontend message builders
@@ -176,6 +176,44 @@ export function buildTerminateMessage(): Buffer {
   return buf;
 }
 
+export function buildSASLInitialResponse(mechanism: string, clientFirstMessage: string): Buffer {
+  const mechBytes = Buffer.from(mechanism + '\0', 'utf8');
+  const msgBytes = Buffer.from(clientFirstMessage, 'utf8');
+  const len = 4 + mechBytes.length + 4 + msgBytes.length;
+  const buf = Buffer.alloc(1 + len);
+  let offset = 0;
+  buf[offset++] = 0x70; // 'p'
+  buf.writeInt32BE(len, offset);
+  offset += 4;
+  mechBytes.copy(buf, offset);
+  offset += mechBytes.length;
+  buf.writeInt32BE(msgBytes.length, offset);
+  offset += 4;
+  msgBytes.copy(buf, offset);
+  return buf;
+}
+
+export function buildSASLResponse(clientFinalMessage: string): Buffer {
+  const msgBytes = Buffer.from(clientFinalMessage, 'utf8');
+  const len = 4 + msgBytes.length;
+  const buf = Buffer.alloc(1 + len);
+  buf[0] = 0x70; // 'p'
+  buf.writeInt32BE(len, 1);
+  msgBytes.copy(buf, 5);
+  return buf;
+}
+
+export function buildCloseMessage(type: 'S' | 'P', name = ''): Buffer {
+  const nameBytes = Buffer.from(name + '\0', 'utf8');
+  const len = 4 + 1 + nameBytes.length;
+  const buf = Buffer.alloc(1 + len);
+  buf[0] = 0x43; // 'C'
+  buf.writeInt32BE(len, 1);
+  buf[5] = type.charCodeAt(0);
+  nameBytes.copy(buf, 6);
+  return buf;
+}
+
 // ---------------------------------------------------------------------------
 // Backend message types
 // ---------------------------------------------------------------------------
@@ -184,6 +222,9 @@ export const enum BackendMessageType {
   AuthenticationOk = 'AuthenticationOk',
   AuthenticationCleartextPassword = 'AuthenticationCleartextPassword',
   AuthenticationMD5Password = 'AuthenticationMD5Password',
+  AuthenticationSASL = 'AuthenticationSASL',
+  AuthenticationSASLContinue = 'AuthenticationSASLContinue',
+  AuthenticationSASLFinal = 'AuthenticationSASLFinal',
   ParameterStatus = 'ParameterStatus',
   BackendKeyData = 'BackendKeyData',
   ReadyForQuery = 'ReadyForQuery',
@@ -194,6 +235,7 @@ export const enum BackendMessageType {
   NoticeResponse = 'NoticeResponse',
   ParseComplete = 'ParseComplete',
   BindComplete = 'BindComplete',
+  CloseComplete = 'CloseComplete',
   NoData = 'NoData',
   EmptyQueryResponse = 'EmptyQueryResponse',
 }
@@ -212,6 +254,9 @@ export type BackendMessage =
   | { type: BackendMessageType.AuthenticationOk }
   | { type: BackendMessageType.AuthenticationCleartextPassword }
   | { type: BackendMessageType.AuthenticationMD5Password; salt: Buffer }
+  | { type: BackendMessageType.AuthenticationSASL; mechanisms: string[] }
+  | { type: BackendMessageType.AuthenticationSASLContinue; data: string }
+  | { type: BackendMessageType.AuthenticationSASLFinal; data: string }
   | { type: BackendMessageType.ParameterStatus; name: string; value: string }
   | { type: BackendMessageType.BackendKeyData; processId: number; secretKey: number }
   | { type: BackendMessageType.ReadyForQuery; status: string }
@@ -222,6 +267,7 @@ export type BackendMessage =
   | { type: BackendMessageType.NoticeResponse; severity: string; message: string }
   | { type: BackendMessageType.ParseComplete }
   | { type: BackendMessageType.BindComplete }
+  | { type: BackendMessageType.CloseComplete }
   | { type: BackendMessageType.NoData }
   | { type: BackendMessageType.EmptyQueryResponse };
 
@@ -245,6 +291,30 @@ function parseBackendMessage(typeByte: number, payload: Buffer): BackendMessage 
         return {
           type: BackendMessageType.AuthenticationMD5Password,
           salt: Buffer.from(payload.subarray(4, 8)),
+        };
+      }
+      if (authType === 10) {
+        // AuthenticationSASL — list of mechanisms
+        const mechanisms: string[] = [];
+        let offset = 4;
+        while (offset < payload.length) {
+          const { value, end } = readCString(payload, offset);
+          if (value === '') break;
+          mechanisms.push(value);
+          offset = end;
+        }
+        return { type: BackendMessageType.AuthenticationSASL, mechanisms };
+      }
+      if (authType === 11) {
+        return {
+          type: BackendMessageType.AuthenticationSASLContinue,
+          data: payload.toString('utf8', 4),
+        };
+      }
+      if (authType === 12) {
+        return {
+          type: BackendMessageType.AuthenticationSASLFinal,
+          data: payload.toString('utf8', 4),
         };
       }
       throw new Error(`unsupported authentication type: ${authType}`);
@@ -345,6 +415,7 @@ function parseBackendMessage(typeByte: number, payload: Buffer): BackendMessage 
 
     case 0x31: return { type: BackendMessageType.ParseComplete };  // '1'
     case 0x32: return { type: BackendMessageType.BindComplete };   // '2'
+    case 0x33: return { type: BackendMessageType.CloseComplete };  // '3'
     case 0x6e: return { type: BackendMessageType.NoData };         // 'n'
     case 0x49: return { type: BackendMessageType.EmptyQueryResponse }; // 'I'
 
@@ -380,4 +451,107 @@ export class MessageReader {
 
     return parseBackendMessage(typeByte, payload);
   }
+}
+
+// ---------------------------------------------------------------------------
+// SCRAM-SHA-256 helpers (RFC 5802)
+// ---------------------------------------------------------------------------
+
+export function generateClientNonce(length = 24): string {
+  return randomBytes(length).toString('base64');
+}
+
+export function buildClientFirstMessage(user: string, nonce: string): string {
+  // n,,n=<user>,r=<nonce>
+  // gs2-header = "n,," (no channel binding)
+  return `n,,n=${saslPrepName(user)},r=${nonce}`;
+}
+
+export function parseServerFirstMessage(data: string): {
+  nonce: string;
+  salt: Buffer;
+  iterations: number;
+} {
+  const parts = new Map<string, string>();
+  for (const attr of data.split(',')) {
+    const eq = attr.indexOf('=');
+    if (eq > 0) parts.set(attr[0], attr.substring(eq + 1));
+  }
+  const nonce = parts.get('r');
+  const saltB64 = parts.get('s');
+  const iterStr = parts.get('i');
+  if (!nonce || !saltB64 || !iterStr) {
+    throw new Error('invalid SCRAM server-first-message');
+  }
+  return {
+    nonce,
+    salt: Buffer.from(saltB64, 'base64'),
+    iterations: parseInt(iterStr, 10),
+  };
+}
+
+export function computeSaltedPassword(password: string, salt: Buffer, iterations: number): Buffer {
+  return pbkdf2Sync(password, salt, iterations, 32, 'sha256');
+}
+
+export function computeClientProof(
+  saltedPassword: Buffer,
+  authMessage: string,
+): { clientProof: string; serverSignature: string } {
+  const clientKey = hmacSha256(saltedPassword, 'Client Key');
+  const storedKey = createHash('sha256').update(clientKey).digest();
+  const clientSignature = hmacSha256(storedKey, authMessage);
+  const clientProof = Buffer.alloc(clientKey.length);
+  for (let i = 0; i < clientKey.length; i++) {
+    clientProof[i] = clientKey[i] ^ clientSignature[i];
+  }
+
+  const serverKey = hmacSha256(saltedPassword, 'Server Key');
+  const serverSignature = hmacSha256(serverKey, authMessage);
+
+  return {
+    clientProof: clientProof.toString('base64'),
+    serverSignature: serverSignature.toString('base64'),
+  };
+}
+
+export function buildClientFinalMessage(
+  clientFirstBare: string,
+  serverFirstMessage: string,
+  serverNonce: string,
+  clientProof: string,
+): string {
+  const channelBinding = Buffer.from('n,,').toString('base64');
+  const clientFinalWithoutProof = `c=${channelBinding},r=${serverNonce}`;
+  return `${clientFinalWithoutProof},p=${clientProof}`;
+}
+
+export function buildAuthMessage(
+  clientFirstBare: string,
+  serverFirstMessage: string,
+  serverNonce: string,
+): string {
+  const channelBinding = Buffer.from('n,,').toString('base64');
+  const clientFinalWithoutProof = `c=${channelBinding},r=${serverNonce}`;
+  return `${clientFirstBare},${serverFirstMessage},${clientFinalWithoutProof}`;
+}
+
+export function verifyServerSignature(serverFinalMessage: string, expectedSignature: string): void {
+  const parts = new Map<string, string>();
+  for (const attr of serverFinalMessage.split(',')) {
+    const eq = attr.indexOf('=');
+    if (eq > 0) parts.set(attr[0], attr.substring(eq + 1));
+  }
+  const v = parts.get('v');
+  if (v !== expectedSignature) {
+    throw new Error('SCRAM server signature verification failed');
+  }
+}
+
+function hmacSha256(key: Buffer, data: string): Buffer {
+  return createHmac('sha256', key).update(data).digest();
+}
+
+function saslPrepName(name: string): string {
+  return name.replace(/=/g, '=3D').replace(/,/g, '=2C');
 }

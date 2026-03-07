@@ -184,21 +184,27 @@ describe('QA: parseValue edge cases', () => {
     });
   });
 
-  describe('Unknown / unregistered OIDs', () => {
-    it('should return raw string for NUMERIC OID', () => {
+  describe('Registered and unknown OIDs', () => {
+    it('should parse NUMERIC OID to string', () => {
       expect(parseValue(TypeOID.NUMERIC, '12345.6789')).toBe('12345.6789');
     });
 
-    it('should return raw string for DATE OID', () => {
-      expect(parseValue(TypeOID.DATE, '2024-01-15')).toBe('2024-01-15');
+    it('should parse DATE OID to Date object', () => {
+      const result = parseValue(TypeOID.DATE, '2024-01-15');
+      expect(result).toBeInstanceOf(Date);
+      expect((result as Date).toISOString()).toBe('2024-01-15T00:00:00.000Z');
     });
 
-    it('should return raw string for TIMESTAMP OID', () => {
-      expect(parseValue(TypeOID.TIMESTAMP, '2024-01-15 12:30:00')).toBe('2024-01-15 12:30:00');
+    it('should parse TIMESTAMP OID to Date object', () => {
+      const result = parseValue(TypeOID.TIMESTAMP, '2024-01-15 12:30:00');
+      expect(result).toBeInstanceOf(Date);
+      expect((result as Date).toISOString()).toBe('2024-01-15T12:30:00.000Z');
     });
 
-    it('should return raw string for BYTEA OID', () => {
-      expect(parseValue(TypeOID.BYTEA, '\\x48656c6c6f')).toBe('\\x48656c6c6f');
+    it('should parse BYTEA OID to Buffer', () => {
+      const result = parseValue(TypeOID.BYTEA, '\\x48656c6c6f');
+      expect(Buffer.isBuffer(result)).toBe(true);
+      expect((result as Buffer).toString()).toBe('Hello');
     });
 
     it('should return raw string for completely unknown OID', () => {

@@ -17,10 +17,20 @@ import {
   buildExecuteMessage,
   buildSyncMessage,
   buildTerminateMessage,
+  buildSASLInitialResponse,
+  buildSASLResponse,
   MessageReader,
   BackendMessageType,
   type BackendMessage,
   type FieldDescription,
+  generateClientNonce,
+  buildClientFirstMessage,
+  parseServerFirstMessage,
+  computeSaltedPassword,
+  computeClientProof,
+  buildAuthMessage,
+  buildClientFinalMessage,
+  verifyServerSignature,
 } from './protocol';
 import { parseValue } from './type-parser';
 import type { ConnectionConfig, QueryResult, FieldInfo } from './types';
@@ -187,6 +197,10 @@ export class Connection {
           );
           break;
 
+        case BackendMessageType.AuthenticationSASL:
+          await this.handleSASLAuth(msg.mechanisms);
+          break;
+
         case BackendMessageType.ParameterStatus:
         case BackendMessageType.BackendKeyData:
         case BackendMessageType.NoticeResponse:
@@ -198,6 +212,71 @@ export class Connection {
         case BackendMessageType.ErrorResponse:
           throw new Error(`${msg.severity}: ${msg.message} (${msg.code})`);
       }
+    }
+  }
+
+  private async handleSASLAuth(mechanisms: string[]): Promise<void> {
+    if (!mechanisms.includes('SCRAM-SHA-256')) {
+      throw new Error(
+        `server requires SASL auth but no supported mechanism found (offered: ${mechanisms.join(', ')})`,
+      );
+    }
+    if (!this.password) {
+      throw new Error('server requires password but none was provided');
+    }
+
+    // Step 1: Send client-first-message
+    const clientNonce = generateClientNonce();
+    const clientFirstMessage = buildClientFirstMessage(this.user, clientNonce);
+    const clientFirstBare = clientFirstMessage.substring(3); // strip "n,,"
+    this.socket!.write(
+      buildSASLInitialResponse('SCRAM-SHA-256', clientFirstMessage),
+    );
+
+    // Step 2: Receive server-first-message
+    const continueMsg = await this.readMessage();
+    if (continueMsg.type !== BackendMessageType.AuthenticationSASLContinue) {
+      throw new Error('expected AuthenticationSASLContinue during SCRAM handshake');
+    }
+    const serverFirstMessage = continueMsg.data;
+    const { nonce: serverNonce, salt, iterations } =
+      parseServerFirstMessage(serverFirstMessage);
+
+    // Verify server nonce starts with our client nonce
+    if (!serverNonce.startsWith(clientNonce)) {
+      throw new Error('SCRAM server nonce does not start with client nonce');
+    }
+
+    // Step 3: Compute proof and send client-final-message
+    const saltedPassword = computeSaltedPassword(this.password, salt, iterations);
+    const authMessage = buildAuthMessage(
+      clientFirstBare,
+      serverFirstMessage,
+      serverNonce,
+    );
+    const { clientProof, serverSignature } = computeClientProof(
+      saltedPassword,
+      authMessage,
+    );
+    const clientFinalMessage = buildClientFinalMessage(
+      clientFirstBare,
+      serverFirstMessage,
+      serverNonce,
+      clientProof,
+    );
+    this.socket!.write(buildSASLResponse(clientFinalMessage));
+
+    // Step 4: Receive server-final-message and verify
+    const finalMsg = await this.readMessage();
+    if (finalMsg.type !== BackendMessageType.AuthenticationSASLFinal) {
+      throw new Error('expected AuthenticationSASLFinal during SCRAM handshake');
+    }
+    verifyServerSignature(finalMsg.data, serverSignature);
+
+    // Step 5: Wait for AuthenticationOk
+    const okMsg = await this.readMessage();
+    if (okMsg.type !== BackendMessageType.AuthenticationOk) {
+      throw new Error('expected AuthenticationOk after SCRAM handshake');
     }
   }
 
