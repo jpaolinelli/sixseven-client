@@ -17,6 +17,7 @@ import {
   buildLink,
   buildUnlink,
   buildMatch,
+  buildShortestMatch,
   buildShortestPath,
 } from './query-builders';
 import { parseConnectionString } from './connection-string';
@@ -28,6 +29,8 @@ import type {
   LinkOptions,
   MatchPatternElement,
   MatchOptions,
+  ShortestMatchSelector,
+  ShortestMatchOptions,
   ShortestPathOptions,
   WithinTraverseOptions,
   DatabaseInfo,
@@ -205,6 +208,18 @@ export class Client {
     options: MatchOptions,
   ): Promise<QueryResult> {
     const q = buildMatch(pattern, options);
+    return this.query(q.text, q.values);
+  }
+
+  // SHORTEST MATCH (path selectors)
+
+  async shortestMatch(
+    pattern: MatchPatternElement[],
+    returnItems: string[],
+    selector: ShortestMatchSelector,
+    options?: ShortestMatchOptions & { k?: number },
+  ): Promise<QueryResult> {
+    const q = buildShortestMatch(pattern, returnItems, selector, options);
     return this.query(q.text, q.values);
   }
 

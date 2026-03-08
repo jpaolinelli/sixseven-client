@@ -33,6 +33,7 @@ export const TypeOID = {
   JSON: 114,
   UUID: 2950,
   EMBEDDING: 100000,
+  PATH: 100006,
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -110,7 +111,7 @@ function parseTimestamp(value: string): Date {
   return new Date(value.replace(' ', 'T') + 'Z');
 }
 
-import type { IntervalValue } from './types';
+import type { IntervalValue, Path, PathNode, PathEdge } from './types';
 
 function parseInterval(value: string): IntervalValue {
   const result: IntervalValue = { years: 0, months: 0, days: 0, hours: 0, minutes: 0, seconds: 0 };
@@ -178,6 +179,43 @@ export function serializeEmbedding(arr: Float32Array | number[]): string {
   return '[' + Array.from(arr).join(',') + ']';
 }
 
+/**
+ * Parse a SixSevenDB PATH value from JSON.
+ *
+ * Wire format: JSON array alternating [node, edge, node, edge, ..., node]
+ * Node: { table, id, ...properties }
+ * Edge: { edge_type, from_id, to_id, ...properties }
+ */
+export function parsePath(value: string): Path {
+  const elements = JSON.parse(value) as Record<string, unknown>[];
+  const nodes: PathNode[] = [];
+  const edges: PathEdge[] = [];
+
+  for (let i = 0; i < elements.length; i++) {
+    const el = elements[i];
+    if (i % 2 === 0) {
+      // Node at even indices
+      const { table, id, ...properties } = el;
+      nodes.push({
+        table: table as string,
+        id,
+        properties,
+      });
+    } else {
+      // Edge at odd indices
+      const { edge_type, from_id, to_id, ...properties } = el;
+      edges.push({
+        edgeType: edge_type as string,
+        fromId: from_id,
+        toId: to_id,
+        properties,
+      });
+    }
+  }
+
+  return { nodes, edges };
+}
+
 // ---------------------------------------------------------------------------
 // Parser registry
 // ---------------------------------------------------------------------------
@@ -207,6 +245,7 @@ const parsers = new Map<number, TypeParser>([
   [TypeOID.JSON, parseJson],
   [TypeOID.UUID, parseUuid],
   [TypeOID.EMBEDDING, parseEmbedding],
+  [TypeOID.PATH, parsePath],
 ]);
 
 /**
