@@ -8,6 +8,8 @@ import type {
   MatchOptions,
   ShortestPathOptions,
   WithinTraverseOptions,
+  ShortestMatchSelector,
+  ShortestMatchOptions,
 } from './types';
 import { serializeEmbedding } from './type-parser';
 
@@ -202,37 +204,93 @@ function isMatchNode(el: MatchPatternElement): el is MatchNode {
   return 'table' in el && !('edgeType' in el);
 }
 
+function buildEdgeLabel(edge: MatchEdge): string {
+  if (edge.edgeTypes && edge.edgeTypes.length > 0) {
+    return edge.edgeTypes.map(escapeIdentifier).join('|');
+  }
+  return escapeIdentifier(edge.edgeType);
+}
+
+function buildEdgeSql(edge: MatchEdge): string {
+  const label = buildEdgeLabel(edge);
+  const inner = `[${edge.alias}:${label}]`;
+  const quantifier = edge.quantifier ?? '';
+  if (edge.direction === 'OUT') {
+    return `-${inner}->${quantifier}`;
+  } else if (edge.direction === 'IN') {
+    return `<-${inner}-${quantifier}`;
+  }
+  return `-${inner}-${quantifier}`;
+}
+
+export function buildMatchPattern(pattern: MatchPatternElement[]): string {
+  const parts: string[] = [];
+  for (const el of pattern) {
+    if (isMatchNode(el)) {
+      parts.push(`(${el.alias}:${escapeIdentifier(el.table)})`);
+    } else {
+      parts.push(buildEdgeSql(el as MatchEdge));
+    }
+  }
+  return parts.join('');
+}
+
 export function buildMatch(
   pattern: MatchPatternElement[],
   options: MatchOptions,
 ): { text: string; values: unknown[] } {
-  let sql = 'MATCH ';
-  const parts: string[] = [];
+  const patternSql = buildMatchPattern(pattern);
 
-  for (let i = 0; i < pattern.length; i++) {
-    const el = pattern[i];
-    if (isMatchNode(el)) {
-      parts.push(`(${el.alias}:${escapeIdentifier(el.table)})`);
-    } else {
-      const edge = el as MatchEdge;
-      const dir = edge.direction;
-      if (dir === 'OUT') {
-        parts.push(`-[${edge.alias}:${escapeIdentifier(edge.edgeType)}]->`);
-      } else if (dir === 'IN') {
-        parts.push(`<-[${edge.alias}:${escapeIdentifier(edge.edgeType)}]-`);
-      } else {
-        parts.push(`-[${edge.alias}:${escapeIdentifier(edge.edgeType)}]-`);
-      }
+  let sql: string;
+  if (options.legacySyntax) {
+    sql = `MATCH ${patternSql}`;
+    if (options.where) {
+      sql += ` WHERE ${options.where}`;
+    }
+    sql += ` RETURN ${options.returnItems.join(', ')}`;
+  } else {
+    sql = `SELECT ${options.returnItems.join(', ')} FROM MATCH ${patternSql}`;
+    if (options.where) {
+      sql += ` WHERE ${options.where}`;
     }
   }
 
-  sql += parts.join('');
+  return { text: sql, values: [] };
+}
+
+// ---------------------------------------------------------------------------
+// SHORTEST MATCH query builder (path selectors)
+// ---------------------------------------------------------------------------
+
+export function buildShortestMatch(
+  pattern: MatchPatternElement[],
+  returnItems: string[],
+  selector: ShortestMatchSelector,
+  options: ShortestMatchOptions & { k?: number } = {},
+): { text: string; values: unknown[] } {
+  const normalized = selector.toUpperCase() as ShortestMatchSelector;
+  const patternSql = buildMatchPattern(pattern);
+
+  let selectorSql: string;
+  if (normalized === 'SHORTEST') {
+    if (options.k === undefined) {
+      throw new TypeError('k is required when selector is SHORTEST');
+    }
+    assertPositiveInt(options.k, 'k');
+    selectorSql = `SHORTEST ${options.k}`;
+  } else {
+    selectorSql = normalized;
+  }
+
+  let sql = `SELECT ${returnItems.join(', ')} FROM MATCH ${selectorSql} ${patternSql}`;
+
+  if (options.weight) {
+    sql += ` WEIGHT ${options.weight}`;
+  }
 
   if (options.where) {
     sql += ` WHERE ${options.where}`;
   }
-
-  sql += ` RETURN ${options.returnItems.join(', ')}`;
 
   return { text: sql, values: [] };
 }
@@ -250,15 +308,23 @@ export function buildShortestPath(
   options: ShortestPathOptions = {},
 ): { text: string; values: unknown[] } {
   const values: unknown[] = [fromId, toId];
-  let sql = `SHORTEST PATH FROM ${escapeIdentifier(fromTable)}($1) TO ${escapeIdentifier(toTable)}($2) VIA ${escapeIdentifier(edgeType)}`;
+  let coreSql = `SHORTEST PATH FROM ${escapeIdentifier(fromTable)}($1) TO ${escapeIdentifier(toTable)}($2) VIA ${escapeIdentifier(edgeType)}`;
 
   if (options.direction) {
-    sql += ` DIRECTION ${options.direction}`;
+    coreSql += ` DIRECTION ${options.direction}`;
   }
 
   if (options.maxDepth !== undefined) {
     assertPositiveInt(options.maxDepth, 'maxDepth');
-    sql += ` MAX_DEPTH ${options.maxDepth}`;
+    coreSql += ` MAX_DEPTH ${options.maxDepth}`;
+  }
+
+  let sql: string;
+  if (options.legacySyntax) {
+    sql = coreSql;
+  } else {
+    const selectClause = options.select ?? '*';
+    sql = `SELECT ${selectClause} FROM ${coreSql}`;
   }
 
   return { text: sql, values };

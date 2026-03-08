@@ -1,13 +1,15 @@
 export { Client } from './client';
 export { Pool, PoolClient } from './pool';
 export { Connection } from './connection';
-export { parseEmbedding, serializeEmbedding, TypeOID, parseValue, numericToNumber } from './type-parser';
+export { parseEmbedding, serializeEmbedding, parsePath, TypeOID, parseValue, numericToNumber } from './type-parser';
 export {
   buildTraverse,
   buildNearest,
   buildLink,
   buildUnlink,
   buildMatch,
+  buildMatchPattern,
+  buildShortestMatch,
   buildShortestPath,
 } from './query-builders';
 export { parseConnectionString } from './connection-string';
@@ -38,8 +40,13 @@ export type {
   MatchNode,
   MatchEdge,
   MatchOptions,
+  ShortestMatchSelector,
+  ShortestMatchOptions,
   ShortestPathOptions,
   WithinTraverseOptions,
+  PathNode,
+  PathEdge,
+  Path,
   IntervalValue,
   EdgeTypeProperty,
   DatabaseInfo,

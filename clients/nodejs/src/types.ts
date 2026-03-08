@@ -70,6 +70,8 @@ export interface WithinTraverseOptions {
 export interface ShortestPathOptions {
   direction?: TraverseDirection;
   maxDepth?: number;
+  select?: string;
+  legacySyntax?: boolean;
 }
 
 export interface MatchNode {
@@ -81,6 +83,8 @@ export interface MatchEdge {
   alias: string;
   edgeType: string;
   direction: 'OUT' | 'IN' | 'BOTH';
+  quantifier?: string;
+  edgeTypes?: string[];
 }
 
 export type MatchPatternElement = MatchNode | MatchEdge;
@@ -88,7 +92,41 @@ export type MatchPatternElement = MatchNode | MatchEdge;
 export interface MatchOptions {
   where?: string;
   returnItems: string[];
+  legacySyntax?: boolean;
 }
+
+export type ShortestMatchSelector = 'ANY SHORTEST' | 'ALL SHORTEST' | 'SHORTEST';
+
+export interface ShortestMatchOptions {
+  where?: string;
+  weight?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Path result types (graph traversal / shortest path results)
+// ---------------------------------------------------------------------------
+
+export interface PathNode {
+  table: string;
+  id: unknown;
+  properties: Record<string, unknown>;
+}
+
+export interface PathEdge {
+  edgeType: string;
+  fromId: unknown;
+  toId: unknown;
+  properties: Record<string, unknown>;
+}
+
+export interface Path {
+  nodes: PathNode[];
+  edges: PathEdge[];
+}
+
+// ---------------------------------------------------------------------------
+// Interval / SHOW types
+// ---------------------------------------------------------------------------
 
 export interface IntervalValue {
   years: number;

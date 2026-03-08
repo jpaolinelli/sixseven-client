@@ -204,7 +204,7 @@ describe('input validation', () => {
 
 // GDB-397: buildMatch
 describe('buildMatch', () => {
-  it('generates single-hop MATCH syntax', () => {
+  it('generates single-hop MATCH syntax (new SELECT...FROM MATCH)', () => {
     const q = buildMatch(
       [
         { alias: 'a', table: 'users' },
@@ -213,7 +213,7 @@ describe('buildMatch', () => {
       ],
       { returnItems: ['a', 'r', 'b'] },
     );
-    expect(q.text).toBe('MATCH (a:"users")-[r:"follows"]->(b:"users") RETURN a, r, b');
+    expect(q.text).toBe('SELECT a, r, b FROM MATCH (a:"users")-[r:"follows"]->(b:"users")');
   });
 
   it('generates multi-hop MATCH', () => {
@@ -228,7 +228,7 @@ describe('buildMatch', () => {
       { returnItems: ['a', 'c'] },
     );
     expect(q.text).toContain('(a:"users")-[r1:"follows"]->(b:"users")-[r2:"likes"]->(c:"posts")');
-    expect(q.text).toContain('RETURN a, c');
+    expect(q.text).toContain('SELECT a, c FROM MATCH');
   });
 
   it('supports undirected edges (BOTH)', () => {
@@ -285,10 +285,10 @@ describe('buildMatch', () => {
 
 // GDB-398: buildShortestPath + withinTraverse
 describe('buildShortestPath', () => {
-  it('generates correct SHORTEST PATH SQL', () => {
+  it('generates correct SHORTEST PATH SQL (new SELECT-wrapped)', () => {
     const q = buildShortestPath('follows', 'users', 1, 'users', 2);
     expect(q.text).toBe(
-      'SHORTEST PATH FROM "users"($1) TO "users"($2) VIA "follows"',
+      'SELECT * FROM SHORTEST PATH FROM "users"($1) TO "users"($2) VIA "follows"',
     );
     expect(q.values).toEqual([1, 2]);
   });

@@ -273,7 +273,7 @@ describe('Client', () => {
 
     const [sql] = mockQuery.mock.calls[0];
     expect(sql).toContain('MATCH');
-    expect(sql).toContain('RETURN b.name');
+    expect(sql).toContain('SELECT b.name FROM MATCH');
   });
 
   it('shortestPath() builds and executes a SHORTEST PATH query', async () => {
