@@ -9,10 +9,12 @@ import pytest
 
 from giodb.type_parser import (
     TypeOID,
+    _parse_path,
     parse_embedding,
     parse_value,
     serialize_embedding,
 )
+from giodb.types import Path, PathEdge, PathNode
 
 
 class TestTypeOIDConstants:
@@ -163,6 +165,98 @@ class TestSerializeEmbedding:
         serialized = serialize_embedding(original)
         parsed = parse_embedding(serialized)
         np.testing.assert_array_almost_equal(original, parsed, decimal=5)
+
+
+class TestParsePath:
+    def test_basic_path(self):
+        data = json.dumps([
+            {"table": "users", "id": 1, "name": "Alice"},
+            {"edge_type": "follows", "from_id": 1, "to_id": 2},
+            {"table": "users", "id": 2, "name": "Bob"},
+        ])
+        path = _parse_path(data)
+        assert isinstance(path, Path)
+        assert path.path_length() == 1
+        assert len(path.nodes()) == 2
+        assert len(path.edges()) == 1
+        assert path.nodes()[0].table == "users"
+        assert path.nodes()[0].id == 1
+        assert path.nodes()[0].properties == {"name": "Alice"}
+        assert path.edges()[0].edge_type == "follows"
+
+    def test_multi_hop_path(self):
+        data = json.dumps([
+            {"table": "users", "id": 1},
+            {"edge_type": "follows", "from_id": 1, "to_id": 2},
+            {"table": "users", "id": 2},
+            {"edge_type": "likes", "from_id": 2, "to_id": 3},
+            {"table": "posts", "id": 3},
+        ])
+        path = _parse_path(data)
+        assert path.path_length() == 2
+        assert len(path.nodes()) == 3
+        assert len(path.edges()) == 2
+        assert path.nodes()[2].table == "posts"
+        assert path.edges()[1].edge_type == "likes"
+
+    def test_single_node_path(self):
+        data = json.dumps([{"table": "users", "id": 1}])
+        path = _parse_path(data)
+        assert path.path_length() == 0
+        assert len(path.nodes()) == 1
+        assert len(path.edges()) == 0
+
+    def test_empty_path(self):
+        path = _parse_path("[]")
+        assert path.path_length() == 0
+        assert len(path.nodes()) == 0
+        assert len(path.edges()) == 0
+
+    def test_edge_properties(self):
+        data = json.dumps([
+            {"table": "users", "id": 1},
+            {"edge_type": "follows", "from_id": 1, "to_id": 2, "since": "2024-01-01", "weight": 0.9},
+            {"table": "users", "id": 2},
+        ])
+        path = _parse_path(data)
+        assert path.edges()[0].properties == {"since": "2024-01-01", "weight": 0.9}
+
+    def test_via_parse_value(self):
+        data = json.dumps([
+            {"table": "users", "id": 1},
+            {"edge_type": "follows", "from_id": 1, "to_id": 2},
+            {"table": "users", "id": 2},
+        ])
+        path = parse_value(TypeOID.PATH, data)
+        assert isinstance(path, Path)
+        assert path.path_length() == 1
+
+    def test_path_oid_constant(self):
+        assert TypeOID.PATH == 100006
+
+    def test_len_dunder(self):
+        data = json.dumps([
+            {"table": "users", "id": 1},
+            {"edge_type": "follows", "from_id": 1, "to_id": 2},
+            {"table": "users", "id": 2},
+        ])
+        path = _parse_path(data)
+        assert len(path) == 1
+
+    def test_repr(self):
+        data = json.dumps([
+            {"table": "users", "id": 1},
+            {"edge_type": "follows", "from_id": 1, "to_id": 2},
+            {"table": "users", "id": 2},
+        ])
+        path = _parse_path(data)
+        r = repr(path)
+        assert "users" in r
+        assert "follows" in r
+
+    def test_invalid_non_array(self):
+        with pytest.raises(ValueError, match="JSON array"):
+            _parse_path('{"not": "array"}')
 
 
 class TestParseValueFallback:

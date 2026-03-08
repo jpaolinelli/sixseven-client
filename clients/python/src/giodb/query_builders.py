@@ -142,14 +142,44 @@ def build_unlink(
     return {"text": text, "values": [from_id, to_id]}
 
 
+def _build_edge_label(edge: MatchEdge) -> str:
+    """Build the edge label portion, supporting cross-edge-type patterns."""
+    if edge.edge_types:
+        return "|".join(escape_identifier(et) for et in edge.edge_types)
+    return escape_identifier(edge.edge_type)
+
+
+def _build_edge_sql(edge: MatchEdge) -> str:
+    """Build the SQL fragment for a single MatchEdge including direction and quantifier."""
+    label = _build_edge_label(edge)
+    bracket = f"[{edge.alias}:{label}]"
+    quantifier = edge.quantifier or ""
+
+    if edge.direction == "IN":
+        return f"<-{bracket}-{quantifier}"
+    elif edge.direction == "BOTH":
+        return f"-{bracket}-{quantifier}"
+    else:  # OUT (default)
+        return f"-{bracket}->{quantifier}"
+
+
 def build_match(
     pattern: list[Union[MatchNode, MatchEdge]],
     return_items: list[str],
     where: str | None = None,
+    *,
+    legacy_syntax: bool = False,
 ) -> dict[str, Any]:
-    """Build a MATCH query (Cypher-style graph pattern matching).
+    """Build a MATCH query for graph pattern matching.
 
-    Syntax: MATCH (a:"table")-[r:"edge"]->(b:"table") RETURN a, b [WHERE expr]
+    New syntax (default):
+        SELECT a, b FROM MATCH (a:"table")-[r:"edge"]->(b:"table") [WHERE expr]
+
+    Legacy syntax (``legacy_syntax=True``):
+        MATCH (a:"table")-[r:"edge"]->(b:"table") RETURN a, b [WHERE expr]
+
+    Supports hop quantifiers on edges (``{min,max}``, ``+``, ``*``) and
+    cross-edge-type patterns via :attr:`MatchEdge.edge_types`.
     """
     if not pattern:
         raise ValueError("MATCH pattern must not be empty")
@@ -159,17 +189,71 @@ def build_match(
         if isinstance(item, MatchNode):
             parts_sql.append(f"({item.alias}:{escape_identifier(item.table)})")
         elif isinstance(item, MatchEdge):
-            if item.direction == "IN":
-                parts_sql.append(f"<-[{item.alias}:{escape_identifier(item.edge_type)}]-")
-            elif item.direction == "BOTH":
-                parts_sql.append(f"-[{item.alias}:{escape_identifier(item.edge_type)}]-")
-            else:  # OUT (default)
-                parts_sql.append(f"-[{item.alias}:{escape_identifier(item.edge_type)}]->")
+            parts_sql.append(_build_edge_sql(item))
 
     pattern_str = "".join(parts_sql)
-    return_str = ", ".join(return_items)
+    select_str = ", ".join(return_items)
 
-    sql = f"MATCH {pattern_str} RETURN {return_str}"
+    if legacy_syntax:
+        sql = f"MATCH {pattern_str} RETURN {select_str}"
+    else:
+        sql = f"SELECT {select_str} FROM MATCH {pattern_str}"
+
+    if where is not None:
+        sql += f" WHERE {where}"
+
+    return {"text": sql, "values": []}
+
+
+def build_shortest_match(
+    pattern: list[Union[MatchNode, MatchEdge]],
+    return_items: list[str],
+    selector: str = "ANY SHORTEST",
+    *,
+    k: int | None = None,
+    weight: str | None = None,
+    where: str | None = None,
+) -> dict[str, Any]:
+    """Build a shortest-path match query with a path selector.
+
+    Syntax:
+        SELECT <items> FROM MATCH <selector> <pattern> [WHERE expr]
+
+    Selectors: ``ANY SHORTEST``, ``ALL SHORTEST``, ``SHORTEST <k>``.
+    Optional ``WEIGHT`` clause specifies the cost property for weighted
+    shortest-path computation.
+    """
+    if not pattern:
+        raise ValueError("MATCH pattern must not be empty")
+
+    valid_selectors = {"ANY SHORTEST", "ALL SHORTEST", "SHORTEST"}
+    base = selector.upper()
+    if base not in valid_selectors:
+        raise ValueError(
+            f"selector must be one of {sorted(valid_selectors)}, got {selector!r}"
+        )
+
+    if base == "SHORTEST":
+        if k is None:
+            raise ValueError("k is required when selector is 'SHORTEST'")
+        _validate_positive_int(k, "k")
+        selector_str = f"SHORTEST {k}"
+    else:
+        selector_str = base
+
+    parts_sql: list[str] = []
+    for item in pattern:
+        if isinstance(item, MatchNode):
+            parts_sql.append(f"({item.alias}:{escape_identifier(item.table)})")
+        elif isinstance(item, MatchEdge):
+            parts_sql.append(_build_edge_sql(item))
+
+    pattern_str = "".join(parts_sql)
+    select_str = ", ".join(return_items)
+
+    sql = f"SELECT {select_str} FROM MATCH {selector_str} {pattern_str}"
+    if weight is not None:
+        sql += f" WEIGHT {weight}"
     if where is not None:
         sql += f" WHERE {where}"
 
@@ -184,21 +268,34 @@ def build_shortest_path(
     to_id: Any,
     direction: str | None = None,
     max_depth: int | None = None,
+    *,
+    select: str = "*",
+    legacy_syntax: bool = False,
 ) -> dict[str, Any]:
     """Build a SHORTEST PATH query.
 
-    Syntax: SHORTEST PATH FROM table($1) TO table($2) VIA edge
-            [DIRECTION d] [MAX_DEPTH n]
+    New syntax (default):
+        SELECT <select> FROM SHORTEST PATH FROM table($1) TO table($2) VIA edge
+        [DIRECTION d] [MAX_DEPTH n]
+
+    Legacy syntax (``legacy_syntax=True``):
+        SHORTEST PATH FROM table($1) TO table($2) VIA edge
+        [DIRECTION d] [MAX_DEPTH n]
     """
-    parts = [
+    inner_parts = [
         f"SHORTEST PATH FROM {escape_identifier(from_table)}($1) TO {escape_identifier(to_table)}($2) VIA {escape_identifier(edge_type)}"
     ]
     values: list[Any] = [from_id, to_id]
 
     if direction is not None:
-        parts.append(f"DIRECTION {direction}")
+        inner_parts.append(f"DIRECTION {direction}")
     if max_depth is not None:
         _validate_positive_int(max_depth, "max_depth")
-        parts.append(f"MAX_DEPTH {max_depth}")
+        inner_parts.append(f"MAX_DEPTH {max_depth}")
 
-    return {"text": " ".join(parts), "values": values}
+    inner_sql = " ".join(inner_parts)
+
+    if legacy_syntax:
+        return {"text": inner_sql, "values": values}
+
+    return {"text": f"SELECT {select} FROM {inner_sql}", "values": values}

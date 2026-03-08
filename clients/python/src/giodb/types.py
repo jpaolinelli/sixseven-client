@@ -67,6 +67,59 @@ class LinkOptions:
 
 
 @dataclass
+class PathNode:
+    """A node in a parsed graph path result."""
+
+    table: str
+    id: Any
+    properties: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class PathEdge:
+    """An edge in a parsed graph path result."""
+
+    edge_type: str
+    from_id: Any
+    to_id: Any
+    properties: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class Path:
+    """A graph path returned from MATCH / SHORTEST PATH queries.
+
+    The wire format is a JSON array alternating ``[node, edge, node, edge, ..., node]``.
+    """
+
+    _nodes: list[PathNode] = field(default_factory=list)
+    _edges: list[PathEdge] = field(default_factory=list)
+
+    def path_length(self) -> int:
+        """Return the number of edges (hops) in this path."""
+        return len(self._edges)
+
+    def nodes(self) -> list[PathNode]:
+        """Return the ordered list of nodes in this path."""
+        return list(self._nodes)
+
+    def edges(self) -> list[PathEdge]:
+        """Return the ordered list of edges in this path."""
+        return list(self._edges)
+
+    def __len__(self) -> int:
+        return self.path_length()
+
+    def __repr__(self) -> str:
+        parts: list[str] = []
+        for i, node in enumerate(self._nodes):
+            parts.append(f"({node.table}:{node.id})")
+            if i < len(self._edges):
+                parts.append(f"-[{self._edges[i].edge_type}]->")
+        return "Path(" + "".join(parts) + ")"
+
+
+@dataclass
 class MatchNode:
     """A node in a MATCH pattern."""
 
@@ -76,8 +129,15 @@ class MatchNode:
 
 @dataclass
 class MatchEdge:
-    """An edge in a MATCH pattern."""
+    """An edge in a MATCH pattern.
+
+    Supports hop quantifiers ('{min,max}', '+', '*') and cross-edge-type
+    patterns via the ``edge_types`` list.  When ``edge_types`` is non-empty
+    it takes precedence over the single ``edge_type`` string.
+    """
 
     alias: str
     edge_type: str
     direction: str = "OUT"  # 'OUT' | 'IN' | 'BOTH'
+    quantifier: str | None = None  # '{2,5}', '+', '*'
+    edge_types: list[str] | None = None  # cross-edge-type: ["follows", "likes"]
