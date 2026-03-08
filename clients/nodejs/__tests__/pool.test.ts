@@ -164,6 +164,198 @@ describe('Pool', () => {
     expect(pool.totalCount).toBe(0);
   });
 
+  it('accepts a connection string', async () => {
+    const pool = new Pool('sixseven://admin:secret@db.example.com:7777/mydb');
+    expect(pool).toBeInstanceOf(Pool);
+    await pool.end();
+  });
+
+  // ---------------------------------------------------------------------------
+  // transaction()
+  // ---------------------------------------------------------------------------
+
+  describe('transaction()', () => {
+    const emptyResult = { rows: [], fields: [], rowCount: 0, command: 'SELECT' };
+
+    it('auto-commits on success and releases client', async () => {
+      mockQuery.mockResolvedValue(emptyResult);
+      const pool = new Pool();
+      const result = await pool.transaction(async (client) => {
+        await client.query('INSERT INTO t VALUES ($1)', [1]);
+        return 42;
+      });
+      expect(result).toBe(42);
+      const calls = mockQuery.mock.calls.map(([sql]: [string]) => sql);
+      expect(calls).toContain('BEGIN');
+      expect(calls).toContain('COMMIT');
+      // Connection should be released back to idle
+      expect(pool.idleCount).toBe(1);
+      await pool.end();
+    });
+
+    it('auto-rollbacks and destroys client on error', async () => {
+      mockQuery.mockResolvedValue(emptyResult);
+      const pool = new Pool();
+      await expect(
+        pool.transaction(async () => {
+          throw new Error('boom');
+        }),
+      ).rejects.toThrow('boom');
+      const calls = mockQuery.mock.calls.map(([sql]: [string]) => sql);
+      expect(calls).toContain('BEGIN');
+      expect(calls).toContain('ROLLBACK');
+      // Connection destroyed on error, so idle count should be 0
+      expect(pool.idleCount).toBe(0);
+      await pool.end();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // PoolClient begin/commit/rollback
+  // ---------------------------------------------------------------------------
+
+  describe('PoolClient transactions', () => {
+    const emptyResult = { rows: [], fields: [], rowCount: 0, command: 'SELECT' };
+
+    it('begin/commit/rollback delegate to query', async () => {
+      mockQuery.mockResolvedValue(emptyResult);
+      const pool = new Pool();
+      const client = await pool.connect();
+
+      await client.begin();
+      expect(mockQuery).toHaveBeenCalledWith('BEGIN', undefined);
+
+      await client.commit();
+      expect(mockQuery).toHaveBeenCalledWith('COMMIT', undefined);
+
+      await client.rollback();
+      expect(mockQuery).toHaveBeenCalledWith('ROLLBACK', undefined);
+
+      client.release();
+      await pool.end();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // MATCH, SHORTEST PATH, SHOW, edge type, EXPLAIN
+  // ---------------------------------------------------------------------------
+
+  describe('convenience methods', () => {
+    const emptyResult = { rows: [], fields: [], rowCount: 0, command: 'SELECT' };
+
+    beforeEach(() => {
+      mockQuery.mockResolvedValue(emptyResult);
+    });
+
+    it('match() delegates to query', async () => {
+      const pool = new Pool();
+      await pool.match(
+        [
+          { table: 'users', alias: 'a' },
+          { edgeType: 'follows', alias: 'e', direction: 'OUT' },
+          { table: 'users', alias: 'b' },
+        ],
+        { where: 'a.id = 1', returnItems: ['b.name'] },
+      );
+      const [sql] = mockQuery.mock.calls[0];
+      expect(sql).toContain('MATCH');
+      await pool.end();
+    });
+
+    it('shortestPath() delegates to query', async () => {
+      const pool = new Pool();
+      await pool.shortestPath('follows', 'users', 1, 'users', 2);
+      const [sql] = mockQuery.mock.calls[0];
+      expect(sql).toContain('SHORTEST PATH');
+      await pool.end();
+    });
+
+    it('showDatabases() sends SHOW DATABASES', async () => {
+      const pool = new Pool();
+      await pool.showDatabases();
+      expect(mockQuery).toHaveBeenCalledWith('SHOW DATABASES', undefined);
+      await pool.end();
+    });
+
+    it('showTables() sends SHOW TABLES', async () => {
+      const pool = new Pool();
+      await pool.showTables();
+      expect(mockQuery).toHaveBeenCalledWith('SHOW TABLES', undefined);
+      await pool.end();
+    });
+
+    it('showColumns() sends SHOW COLUMNS FROM', async () => {
+      const pool = new Pool();
+      await pool.showColumns('users');
+      expect(mockQuery).toHaveBeenCalledWith('SHOW COLUMNS FROM "users"', undefined);
+      await pool.end();
+    });
+
+    it('showEdgeTypes()', async () => {
+      const pool = new Pool();
+      await pool.showEdgeTypes();
+      expect(mockQuery).toHaveBeenCalledWith('SHOW EDGE TYPES', undefined);
+      await pool.end();
+    });
+
+    it('showIndexes()', async () => {
+      const pool = new Pool();
+      await pool.showIndexes();
+      expect(mockQuery).toHaveBeenCalledWith('SHOW INDEXES', undefined);
+      await pool.end();
+    });
+
+    it('showEmbeddings()', async () => {
+      const pool = new Pool();
+      await pool.showEmbeddings();
+      expect(mockQuery).toHaveBeenCalledWith('SHOW EMBEDDINGS', undefined);
+      await pool.end();
+    });
+
+    it('showProviders()', async () => {
+      const pool = new Pool();
+      await pool.showProviders();
+      expect(mockQuery).toHaveBeenCalledWith('SHOW PROVIDERS', undefined);
+      await pool.end();
+    });
+
+    it('createEdgeType() builds correct SQL', async () => {
+      const pool = new Pool();
+      await pool.createEdgeType('follows', [{ name: 'since', type: 'DATE' }], 'users', 'users');
+      const [sql] = mockQuery.mock.calls[0];
+      expect(sql).toBe('CREATE EDGE TYPE "follows" ("since" DATE) FROM "users" TO "users"');
+      await pool.end();
+    });
+
+    it('dropEdgeType() builds correct SQL', async () => {
+      const pool = new Pool();
+      await pool.dropEdgeType('follows', { ifExists: true });
+      expect(mockQuery).toHaveBeenCalledWith('DROP EDGE TYPE IF EXISTS "follows"', undefined);
+      await pool.end();
+    });
+
+    it('explain() prepends EXPLAIN', async () => {
+      const pool = new Pool();
+      await pool.explain('SELECT 1');
+      expect(mockQuery).toHaveBeenCalledWith('EXPLAIN SELECT 1', undefined);
+      await pool.end();
+    });
+
+    it('explainAnalyze() prepends EXPLAIN ANALYZE', async () => {
+      const pool = new Pool();
+      await pool.explainAnalyze('SELECT 1');
+      expect(mockQuery).toHaveBeenCalledWith('EXPLAIN ANALYZE SELECT 1', undefined);
+      await pool.end();
+    });
+
+    it('explainJson() prepends EXPLAIN (FORMAT JSON)', async () => {
+      const pool = new Pool();
+      await pool.explainJson('SELECT 1');
+      expect(mockQuery).toHaveBeenCalledWith('EXPLAIN (FORMAT JSON) SELECT 1', undefined);
+      await pool.end();
+    });
+  });
+
   // ---------------------------------------------------------------------------
   // min — pre-warm and maintain minimum idle connections
   // ---------------------------------------------------------------------------

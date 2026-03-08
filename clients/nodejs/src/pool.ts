@@ -19,7 +19,15 @@
  */
 
 import { Connection } from './connection';
-import { buildTraverse, buildNearest, buildLink, buildUnlink } from './query-builders';
+import {
+  buildTraverse,
+  buildNearest,
+  buildLink,
+  buildUnlink,
+  buildMatch,
+  buildShortestPath,
+} from './query-builders';
+import { parseConnectionString } from './connection-string';
 import type {
   ConnectionConfig,
   PoolConfig,
@@ -27,6 +35,18 @@ import type {
   TraverseOptions,
   NearestOptions,
   LinkOptions,
+  MatchPatternElement,
+  MatchOptions,
+  ShortestPathOptions,
+  WithinTraverseOptions,
+  DatabaseInfo,
+  TableInfo,
+  ColumnInfo,
+  EdgeTypeInfo,
+  EdgeTypeProperty,
+  IndexInfo,
+  EmbeddingInfo,
+  ProviderInfo,
 } from './types';
 import { DEFAULTS } from './types';
 
@@ -59,6 +79,18 @@ export class PoolClient {
     if (this.released) throw new Error('client already released');
     return this.connection.query<T>(text, values);
   }
+
+  async begin(): Promise<QueryResult> {
+    return this.query('BEGIN');
+  }
+
+  async commit(): Promise<QueryResult> {
+    return this.query('COMMIT');
+  }
+
+  async rollback(): Promise<QueryResult> {
+    return this.query('ROLLBACK');
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -84,18 +116,22 @@ export class Pool {
   private readonly connectionTimeoutMillis: number;
   private readonly idleTimeoutMillis: number;
 
-  constructor(config?: PoolConfig) {
+  constructor(config?: PoolConfig | string) {
+    const resolved = typeof config === 'string'
+      ? parseConnectionString(config)
+      : config;
     this.connConfig = {
-      host: config?.host ?? DEFAULTS.host,
-      port: config?.port ?? DEFAULTS.port,
-      user: config?.user ?? DEFAULTS.user,
-      password: config?.password,
-      database: config?.database ?? DEFAULTS.database,
+      host: resolved?.host ?? DEFAULTS.host,
+      port: resolved?.port ?? DEFAULTS.port,
+      user: resolved?.user ?? DEFAULTS.user,
+      password: resolved?.password,
+      database: resolved?.database ?? DEFAULTS.database,
     };
-    this.max = config?.max ?? 10;
-    this.min = Math.min(config?.min ?? 0, this.max);
-    this.connectionTimeoutMillis = config?.connectionTimeoutMillis ?? 30_000;
-    this.idleTimeoutMillis = config?.idleTimeoutMillis ?? 0;
+    const poolCfg = typeof config === 'string' ? undefined : config;
+    this.max = poolCfg?.max ?? 10;
+    this.min = Math.min(poolCfg?.min ?? 0, this.max);
+    this.connectionTimeoutMillis = poolCfg?.connectionTimeoutMillis ?? 30_000;
+    this.idleTimeoutMillis = poolCfg?.idleTimeoutMillis ?? 0;
 
     if (this.min > 0) {
       this.warmPool().catch(() => {});
@@ -205,6 +241,102 @@ export class Pool {
   /** Number of queued connect requests waiting for a free connection. */
   get waitingCount(): number {
     return this.waiters.length;
+  }
+
+  /** Run a callback inside a transaction. Auto-commits on success, auto-rollbacks on error. */
+  async transaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
+    const client = await this.connect();
+    try {
+      await client.begin();
+      const result = await fn(client);
+      await client.commit();
+      client.release();
+      return result;
+    } catch (err) {
+      try { await client.rollback(); } catch { /* ignore rollback errors */ }
+      client.release(err instanceof Error ? err : true);
+      throw err;
+    }
+  }
+
+  async match(
+    pattern: MatchPatternElement[],
+    options: MatchOptions,
+  ): Promise<QueryResult> {
+    const q = buildMatch(pattern, options);
+    return this.query(q.text, q.values);
+  }
+
+  async shortestPath(
+    edgeType: string,
+    fromTable: string,
+    fromId: unknown,
+    toTable: string,
+    toId: unknown,
+    options?: ShortestPathOptions,
+  ): Promise<QueryResult> {
+    const q = buildShortestPath(edgeType, fromTable, fromId, toTable, toId, options);
+    return this.query(q.text, q.values);
+  }
+
+  async showDatabases(): Promise<QueryResult<DatabaseInfo>> {
+    return this.query<DatabaseInfo>('SHOW DATABASES');
+  }
+
+  async showTables(): Promise<QueryResult<TableInfo>> {
+    return this.query<TableInfo>('SHOW TABLES');
+  }
+
+  async showColumns(table: string): Promise<QueryResult<ColumnInfo>> {
+    return this.query<ColumnInfo>(`SHOW COLUMNS FROM "${table.replace(/"/g, '""')}"`);
+  }
+
+  async showEdgeTypes(): Promise<QueryResult<EdgeTypeInfo>> {
+    return this.query<EdgeTypeInfo>('SHOW EDGE TYPES');
+  }
+
+  async showIndexes(): Promise<QueryResult<IndexInfo>> {
+    return this.query<IndexInfo>('SHOW INDEXES');
+  }
+
+  async showEmbeddings(): Promise<QueryResult<EmbeddingInfo>> {
+    return this.query<EmbeddingInfo>('SHOW EMBEDDINGS');
+  }
+
+  async showProviders(): Promise<QueryResult<ProviderInfo>> {
+    return this.query<ProviderInfo>('SHOW PROVIDERS');
+  }
+
+  async createEdgeType(
+    name: string,
+    properties: EdgeTypeProperty[],
+    fromTable: string,
+    toTable: string,
+  ): Promise<QueryResult> {
+    const escapedName = `"${name.replace(/"/g, '""')}"`;
+    const propsSql = properties.map(
+      (p) => `"${p.name.replace(/"/g, '""')}" ${p.type}`,
+    ).join(', ');
+    const sql = `CREATE EDGE TYPE ${escapedName} (${propsSql}) FROM "${fromTable.replace(/"/g, '""')}" TO "${toTable.replace(/"/g, '""')}"`;
+    return this.query(sql);
+  }
+
+  async dropEdgeType(name: string, opts?: { ifExists?: boolean }): Promise<QueryResult> {
+    const escapedName = `"${name.replace(/"/g, '""')}"`;
+    const ifExists = opts?.ifExists ? 'IF EXISTS ' : '';
+    return this.query(`DROP EDGE TYPE ${ifExists}${escapedName}`);
+  }
+
+  async explain(sql: string, values?: unknown[]): Promise<QueryResult> {
+    return this.query(`EXPLAIN ${sql}`, values);
+  }
+
+  async explainAnalyze(sql: string, values?: unknown[]): Promise<QueryResult> {
+    return this.query(`EXPLAIN ANALYZE ${sql}`, values);
+  }
+
+  async explainJson(sql: string, values?: unknown[]): Promise<QueryResult> {
+    return this.query(`EXPLAIN (FORMAT JSON) ${sql}`, values);
   }
 
   // ---------------------------------------------------------------------------

@@ -10,8 +10,18 @@ import {
   buildExecuteMessage,
   buildSyncMessage,
   buildTerminateMessage,
+  buildSASLInitialResponse,
+  buildSASLResponse,
+  buildCloseMessage,
   MessageReader,
   BackendMessageType,
+  generateClientNonce,
+  buildClientFirstMessage,
+  parseServerFirstMessage,
+  computeSaltedPassword,
+  computeClientProof,
+  buildAuthMessage,
+  verifyServerSignature,
 } from '../src/protocol';
 
 // ---------------------------------------------------------------------------
@@ -130,6 +140,49 @@ describe('buildTerminateMessage', () => {
     expect(buf[0]).toBe(0x58);
     expect(buf.readInt32BE(1)).toBe(4);
     expect(buf.length).toBe(5);
+  });
+});
+
+describe('buildSASLInitialResponse', () => {
+  it('has type byte 0x70 ("p") with mechanism and message', () => {
+    const buf = buildSASLInitialResponse('SCRAM-SHA-256', 'n,,n=user,r=nonce123');
+    expect(buf[0]).toBe(0x70);
+    const len = buf.readInt32BE(1);
+    expect(1 + len).toBe(buf.length);
+    // Check mechanism name is in the payload
+    const mechEnd = buf.indexOf(0, 5);
+    const mech = buf.toString('utf8', 5, mechEnd);
+    expect(mech).toBe('SCRAM-SHA-256');
+    // Check message length
+    const msgLen = buf.readInt32BE(mechEnd + 1);
+    const msg = buf.toString('utf8', mechEnd + 5, mechEnd + 5 + msgLen);
+    expect(msg).toBe('n,,n=user,r=nonce123');
+  });
+});
+
+describe('buildSASLResponse', () => {
+  it('has type byte 0x70 ("p") with message', () => {
+    const buf = buildSASLResponse('c=biws,r=nonce,p=proof');
+    expect(buf[0]).toBe(0x70);
+    const len = buf.readInt32BE(1);
+    expect(1 + len).toBe(buf.length);
+    const msg = buf.toString('utf8', 5);
+    expect(msg).toBe('c=biws,r=nonce,p=proof');
+  });
+});
+
+describe('buildCloseMessage', () => {
+  it('has type byte 0x43 ("C") with statement type', () => {
+    const buf = buildCloseMessage('S', 'stmt1');
+    expect(buf[0]).toBe(0x43);
+    expect(buf[5]).toBe('S'.charCodeAt(0));
+    const name = buf.toString('utf8', 6, buf.length - 1);
+    expect(name).toBe('stmt1');
+  });
+
+  it('supports portal type', () => {
+    const buf = buildCloseMessage('P');
+    expect(buf[5]).toBe('P'.charCodeAt(0));
   });
 });
 
@@ -344,5 +397,143 @@ describe('MessageReader', () => {
     reader.append(full.subarray(3));
     const msg = reader.read();
     expect(msg!.type).toBe(BackendMessageType.ReadyForQuery);
+  });
+
+  it('parses AuthenticationSASL (R, authType=10) with mechanisms', () => {
+    const reader = new MessageReader();
+    const mechList = Buffer.from('SCRAM-SHA-256\0\0', 'utf8');
+    const payload = Buffer.alloc(4 + mechList.length);
+    payload.writeInt32BE(10, 0);
+    mechList.copy(payload, 4);
+    reader.append(makeBackendMessage(0x52, payload));
+    const msg = reader.read();
+    expect(msg!.type).toBe(BackendMessageType.AuthenticationSASL);
+    if (msg!.type === BackendMessageType.AuthenticationSASL) {
+      expect(msg!.mechanisms).toEqual(['SCRAM-SHA-256']);
+    }
+  });
+
+  it('parses AuthenticationSASLContinue (R, authType=11)', () => {
+    const reader = new MessageReader();
+    const serverFirst = 'r=clientNonce+serverNonce,s=c2FsdA==,i=4096';
+    const msgBytes = Buffer.from(serverFirst, 'utf8');
+    const payload = Buffer.alloc(4 + msgBytes.length);
+    payload.writeInt32BE(11, 0);
+    msgBytes.copy(payload, 4);
+    reader.append(makeBackendMessage(0x52, payload));
+    const msg = reader.read();
+    expect(msg!.type).toBe(BackendMessageType.AuthenticationSASLContinue);
+    if (msg!.type === BackendMessageType.AuthenticationSASLContinue) {
+      expect(msg!.data).toBe(serverFirst);
+    }
+  });
+
+  it('parses AuthenticationSASLFinal (R, authType=12)', () => {
+    const reader = new MessageReader();
+    const serverFinal = 'v=someBase64Signature';
+    const msgBytes = Buffer.from(serverFinal, 'utf8');
+    const payload = Buffer.alloc(4 + msgBytes.length);
+    payload.writeInt32BE(12, 0);
+    msgBytes.copy(payload, 4);
+    reader.append(makeBackendMessage(0x52, payload));
+    const msg = reader.read();
+    expect(msg!.type).toBe(BackendMessageType.AuthenticationSASLFinal);
+    if (msg!.type === BackendMessageType.AuthenticationSASLFinal) {
+      expect(msg!.data).toBe(serverFinal);
+    }
+  });
+
+  it('parses CloseComplete (3)', () => {
+    const reader = new MessageReader();
+    reader.append(makeBackendMessage(0x33, Buffer.alloc(0)));
+    const msg = reader.read();
+    expect(msg!.type).toBe(BackendMessageType.CloseComplete);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SCRAM-SHA-256 helpers
+// ---------------------------------------------------------------------------
+
+describe('generateClientNonce', () => {
+  it('generates a base64-encoded nonce', () => {
+    const nonce = generateClientNonce();
+    expect(typeof nonce).toBe('string');
+    expect(nonce.length).toBeGreaterThan(0);
+    // Should be valid base64
+    expect(Buffer.from(nonce, 'base64').toString('base64')).toBe(nonce);
+  });
+
+  it('generates unique nonces', () => {
+    const n1 = generateClientNonce();
+    const n2 = generateClientNonce();
+    expect(n1).not.toBe(n2);
+  });
+});
+
+describe('buildClientFirstMessage', () => {
+  it('builds gs2-header + bare message', () => {
+    const msg = buildClientFirstMessage('user', 'rOprNGfwEbeRWgbNEkqO');
+    expect(msg).toBe('n,,n=user,r=rOprNGfwEbeRWgbNEkqO');
+  });
+
+  it('escapes special characters in username', () => {
+    const msg = buildClientFirstMessage('us=er,name', 'nonce');
+    expect(msg).toBe('n,,n=us=3Der=2Cname,r=nonce');
+  });
+});
+
+describe('parseServerFirstMessage', () => {
+  it('extracts nonce, salt, and iterations', () => {
+    const salt = Buffer.from('salt').toString('base64');
+    const data = `r=clientNonce+serverNonce,s=${salt},i=4096`;
+    const result = parseServerFirstMessage(data);
+    expect(result.nonce).toBe('clientNonce+serverNonce');
+    expect(result.salt).toEqual(Buffer.from('salt'));
+    expect(result.iterations).toBe(4096);
+  });
+
+  it('throws on malformed message', () => {
+    expect(() => parseServerFirstMessage('invalid')).toThrow('invalid SCRAM');
+  });
+});
+
+describe('computeSaltedPassword', () => {
+  it('computes PBKDF2-SHA-256 with given parameters', () => {
+    const salt = Buffer.from('salt');
+    const result = computeSaltedPassword('password', salt, 4096);
+    expect(result).toBeInstanceOf(Buffer);
+    expect(result.length).toBe(32);
+  });
+
+  it('is deterministic', () => {
+    const salt = Buffer.from('test-salt');
+    const r1 = computeSaltedPassword('pwd', salt, 1000);
+    const r2 = computeSaltedPassword('pwd', salt, 1000);
+    expect(r1).toEqual(r2);
+  });
+});
+
+describe('computeClientProof', () => {
+  it('returns clientProof and serverSignature as base64', () => {
+    const salt = Buffer.from('test-salt');
+    const saltedPwd = computeSaltedPassword('password', salt, 4096);
+    const result = computeClientProof(saltedPwd, 'test auth message');
+    expect(typeof result.clientProof).toBe('string');
+    expect(typeof result.serverSignature).toBe('string');
+    // Both should be valid base64
+    expect(Buffer.from(result.clientProof, 'base64').length).toBeGreaterThan(0);
+    expect(Buffer.from(result.serverSignature, 'base64').length).toBeGreaterThan(0);
+  });
+});
+
+describe('verifyServerSignature', () => {
+  it('succeeds with matching signature', () => {
+    const sig = 'dGVzdFNpZw==';
+    expect(() => verifyServerSignature(`v=${sig}`, sig)).not.toThrow();
+  });
+
+  it('throws on mismatch', () => {
+    expect(() => verifyServerSignature('v=wrong', 'correct')).toThrow('verification failed');
   });
 });

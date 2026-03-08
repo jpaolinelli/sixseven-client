@@ -4,6 +4,8 @@ import {
   buildNearest,
   buildLink,
   buildUnlink,
+  buildMatch,
+  buildShortestPath,
 } from '../src/query-builders';
 
 describe('buildTraverse', () => {
@@ -151,5 +153,193 @@ describe('buildUnlink', () => {
       'UNLINK "users"($1) FROM "users"($2) VIA "follows"',
     );
     expect(q.values).toEqual([1, 2]);
+  });
+});
+
+// GDB-399: Input validation
+describe('input validation', () => {
+  it('buildTraverse: rejects negative maxDepth', () => {
+    expect(() => buildTraverse('e', 't', 1, { maxDepth: -1 })).toThrow(TypeError);
+  });
+
+  it('buildTraverse: rejects float maxDepth', () => {
+    expect(() => buildTraverse('e', 't', 1, { maxDepth: 2.5 })).toThrow(TypeError);
+  });
+
+  it('buildTraverse: rejects zero maxDepth', () => {
+    expect(() => buildTraverse('e', 't', 1, { maxDepth: 0 })).toThrow(TypeError);
+  });
+
+  it('buildNearest: rejects negative k', () => {
+    expect(() => buildNearest('t', 'c', 'q', { k: -5 })).toThrow(TypeError);
+  });
+
+  it('buildNearest: rejects zero k', () => {
+    expect(() => buildNearest('t', 'c', 'q', { k: 0 })).toThrow(TypeError);
+  });
+
+  it('buildNearest: rejects float k', () => {
+    expect(() => buildNearest('t', 'c', 'q', { k: 3.14 })).toThrow(TypeError);
+  });
+
+  it('buildTraverse: accepts valid maxDepth', () => {
+    expect(() => buildTraverse('e', 't', 1, { maxDepth: 1 })).not.toThrow();
+    expect(() => buildTraverse('e', 't', 1, { maxDepth: 100 })).not.toThrow();
+  });
+
+  it('buildNearest: accepts valid k', () => {
+    expect(() => buildNearest('t', 'c', 'q', { k: 1 })).not.toThrow();
+    expect(() => buildNearest('t', 'c', 'q', { k: 100 })).not.toThrow();
+  });
+
+  it('error message includes parameter name and value', () => {
+    try {
+      buildTraverse('e', 't', 1, { maxDepth: -3 });
+    } catch (err: any) {
+      expect(err.message).toContain('maxDepth');
+      expect(err.message).toContain('-3');
+    }
+  });
+});
+
+// GDB-397: buildMatch
+describe('buildMatch', () => {
+  it('generates single-hop MATCH syntax', () => {
+    const q = buildMatch(
+      [
+        { alias: 'a', table: 'users' },
+        { alias: 'r', edgeType: 'follows', direction: 'OUT' },
+        { alias: 'b', table: 'users' },
+      ],
+      { returnItems: ['a', 'r', 'b'] },
+    );
+    expect(q.text).toBe('MATCH (a:"users")-[r:"follows"]->(b:"users") RETURN a, r, b');
+  });
+
+  it('generates multi-hop MATCH', () => {
+    const q = buildMatch(
+      [
+        { alias: 'a', table: 'users' },
+        { alias: 'r1', edgeType: 'follows', direction: 'OUT' },
+        { alias: 'b', table: 'users' },
+        { alias: 'r2', edgeType: 'likes', direction: 'OUT' },
+        { alias: 'c', table: 'posts' },
+      ],
+      { returnItems: ['a', 'c'] },
+    );
+    expect(q.text).toContain('(a:"users")-[r1:"follows"]->(b:"users")-[r2:"likes"]->(c:"posts")');
+    expect(q.text).toContain('RETURN a, c');
+  });
+
+  it('supports undirected edges (BOTH)', () => {
+    const q = buildMatch(
+      [
+        { alias: 'a', table: 'users' },
+        { alias: 'r', edgeType: 'knows', direction: 'BOTH' },
+        { alias: 'b', table: 'users' },
+      ],
+      { returnItems: ['a', 'b'] },
+    );
+    expect(q.text).toContain('-[r:"knows"]-');
+    expect(q.text).not.toContain('->');
+    expect(q.text).not.toContain('<-');
+  });
+
+  it('supports IN direction', () => {
+    const q = buildMatch(
+      [
+        { alias: 'a', table: 'users' },
+        { alias: 'r', edgeType: 'follows', direction: 'IN' },
+        { alias: 'b', table: 'users' },
+      ],
+      { returnItems: ['a'] },
+    );
+    expect(q.text).toContain('<-[r:"follows"]-');
+  });
+
+  it('appends WHERE clause', () => {
+    const q = buildMatch(
+      [
+        { alias: 'a', table: 'users' },
+        { alias: 'r', edgeType: 'follows', direction: 'OUT' },
+        { alias: 'b', table: 'users' },
+      ],
+      { where: 'a.age > 21', returnItems: ['a'] },
+    );
+    expect(q.text).toContain('WHERE a.age > 21');
+  });
+
+  it('escapes identifiers', () => {
+    const q = buildMatch(
+      [
+        { alias: 'a', table: 'my"table' },
+        { alias: 'r', edgeType: 'edge"type', direction: 'OUT' },
+        { alias: 'b', table: 'other' },
+      ],
+      { returnItems: ['a'] },
+    );
+    expect(q.text).toContain('"my""table"');
+    expect(q.text).toContain('"edge""type"');
+  });
+});
+
+// GDB-398: buildShortestPath + withinTraverse
+describe('buildShortestPath', () => {
+  it('generates correct SHORTEST PATH SQL', () => {
+    const q = buildShortestPath('follows', 'users', 1, 'users', 2);
+    expect(q.text).toBe(
+      'SHORTEST PATH FROM "users"($1) TO "users"($2) VIA "follows"',
+    );
+    expect(q.values).toEqual([1, 2]);
+  });
+
+  it('supports direction option', () => {
+    const q = buildShortestPath('follows', 'users', 1, 'users', 2, { direction: 'BOTH' });
+    expect(q.text).toContain('DIRECTION BOTH');
+  });
+
+  it('supports maxDepth option', () => {
+    const q = buildShortestPath('follows', 'users', 1, 'users', 2, { maxDepth: 5 });
+    expect(q.text).toContain('MAX_DEPTH 5');
+  });
+
+  it('validates maxDepth', () => {
+    expect(() => buildShortestPath('e', 't', 1, 't', 2, { maxDepth: -1 })).toThrow(TypeError);
+  });
+
+  it('escapes identifiers', () => {
+    const q = buildShortestPath('e"dge', 'ta"ble', 1, 'ta"ble', 2);
+    expect(q.text).toContain('"e""dge"');
+    expect(q.text).toContain('"ta""ble"');
+  });
+});
+
+describe('buildNearest with withinTraverse', () => {
+  it('appends WITHIN TRAVERSE clause', () => {
+    const q = buildNearest('posts', 'embedding', 'test', {
+      k: 5,
+      withinTraverse: {
+        edgeType: 'follows',
+        fromTable: 'users',
+        startId: 1,
+      },
+    });
+    expect(q.text).toContain('WITHIN TRAVERSE "follows" FROM "users"($2)');
+    expect(q.values).toEqual(['test', 1]);
+  });
+
+  it('includes direction and maxDepth in WITHIN TRAVERSE', () => {
+    const q = buildNearest('posts', 'embedding', 'test', {
+      k: 5,
+      withinTraverse: {
+        edgeType: 'follows',
+        fromTable: 'users',
+        startId: 1,
+        direction: 'OUT',
+        maxDepth: 3,
+      },
+    });
+    expect(q.text).toContain('DIRECTION OUT');
+    expect(q.text).toContain('MAX_DEPTH 3');
   });
 });

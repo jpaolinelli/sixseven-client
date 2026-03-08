@@ -4,6 +4,7 @@ import {
   parseEmbedding,
   serializeEmbedding,
   parseValue,
+  numericToNumber,
 } from '../src/type-parser';
 
 describe('TypeOID', () => {
@@ -80,13 +81,103 @@ describe('parseValue', () => {
     expect(parseValue(TypeOID.TEXT, 'hello')).toBe('hello');
   });
 
-  it('returns raw string for UUID', () => {
-    const uuid = '550e8400-e29b-41d4-a716-446655440000';
-    expect(parseValue(TypeOID.UUID, uuid)).toBe(uuid);
+  it('parses UUID and lowercases', () => {
+    const uuid = '550E8400-E29B-41D4-A716-446655440000';
+    expect(parseValue(TypeOID.UUID, uuid)).toBe(uuid.toLowerCase());
   });
 
   it('returns raw string for unknown OID', () => {
     expect(parseValue(99999, 'whatever')).toBe('whatever');
+  });
+
+  // GDB-395: Temporal parsers
+  it('parses DATE to Date object', () => {
+    const result = parseValue(TypeOID.DATE, '2024-01-15') as Date;
+    expect(result).toBeInstanceOf(Date);
+    expect(result.getUTCFullYear()).toBe(2024);
+    expect(result.getUTCMonth()).toBe(0); // January
+    expect(result.getUTCDate()).toBe(15);
+  });
+
+  it('parses TIMESTAMP to Date object', () => {
+    const result = parseValue(TypeOID.TIMESTAMP, '2024-01-15 14:30:00') as Date;
+    expect(result).toBeInstanceOf(Date);
+    expect(result.getUTCHours()).toBe(14);
+    expect(result.getUTCMinutes()).toBe(30);
+  });
+
+  it('parses TIME as string', () => {
+    expect(parseValue(TypeOID.TIME, '14:30:00')).toBe('14:30:00');
+  });
+
+  it('parses INTERVAL to structured object', () => {
+    const result = parseValue(TypeOID.INTERVAL, '1 year 2 mons 3 days 04:05:06') as any;
+    expect(result.years).toBe(1);
+    expect(result.months).toBe(2);
+    expect(result.days).toBe(3);
+    expect(result.hours).toBe(4);
+    expect(result.minutes).toBe(5);
+    expect(result.seconds).toBe(6);
+  });
+
+  it('parses zero INTERVAL', () => {
+    const result = parseValue(TypeOID.INTERVAL, '00:00:00') as any;
+    expect(result.years).toBe(0);
+    expect(result.months).toBe(0);
+    expect(result.days).toBe(0);
+    expect(result.hours).toBe(0);
+    expect(result.minutes).toBe(0);
+    expect(result.seconds).toBe(0);
+  });
+
+  // GDB-396: NUMERIC, unsigned ints, BLOB, UUID
+  it('parses NUMERIC as string (preserves precision)', () => {
+    expect(parseValue(TypeOID.NUMERIC, '123456789.123456789')).toBe('123456789.123456789');
+  });
+
+  it('parses TINYINT', () => {
+    expect(parseValue(TypeOID.TINYINT, '127')).toBe(127);
+  });
+
+  it('parses UINT8', () => {
+    expect(parseValue(TypeOID.UINT8, '255')).toBe(255);
+  });
+
+  it('parses UINT16', () => {
+    expect(parseValue(TypeOID.UINT16, '65535')).toBe(65535);
+  });
+
+  it('parses UINT32', () => {
+    expect(parseValue(TypeOID.UINT32, '4294967295')).toBe(4294967295);
+  });
+
+  it('parses UINT64 as number when safe', () => {
+    expect(parseValue(TypeOID.UINT64, '42')).toBe(42);
+  });
+
+  it('parses UINT64 as BigInt when unsafe', () => {
+    const result = parseValue(TypeOID.UINT64, '18446744073709551615');
+    expect(typeof result).toBe('bigint');
+  });
+
+  it('parses BYTEA hex to Buffer', () => {
+    const result = parseValue(TypeOID.BYTEA, '\\xDEADBEEF') as Buffer;
+    expect(result).toBeInstanceOf(Buffer);
+    expect(result.toString('hex')).toBe('deadbeef');
+  });
+
+  it('parses CHAR as string', () => {
+    expect(parseValue(TypeOID.CHAR, 'A')).toBe('A');
+  });
+
+  it('parses VARCHAR as string', () => {
+    expect(parseValue(TypeOID.VARCHAR, 'hello')).toBe('hello');
+  });
+});
+
+describe('numericToNumber', () => {
+  it('converts numeric string to number', () => {
+    expect(numericToNumber('123.456')).toBe(123.456);
   });
 });
 
