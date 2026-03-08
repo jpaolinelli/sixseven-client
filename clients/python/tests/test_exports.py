@@ -77,6 +77,9 @@ class TestExportedFunctions:
         assert callable(giodb.build_nearest)
         assert callable(giodb.build_link)
         assert callable(giodb.build_unlink)
+        assert callable(giodb.build_match)
+        assert callable(giodb.build_shortest_match)
+        assert callable(giodb.build_shortest_path)
         assert callable(giodb.escape_identifier)
 
     def test_type_parser(self):
@@ -87,6 +90,12 @@ class TestExportedFunctions:
     def test_type_oid(self):
         assert giodb.TypeOID.BOOL == 16
         assert giodb.TypeOID.EMBEDDING == 100000
+        assert giodb.TypeOID.PATH == 100006
+
+    def test_path_types(self):
+        assert hasattr(giodb, "Path")
+        assert hasattr(giodb, "PathNode")
+        assert hasattr(giodb, "PathEdge")
 
 
 class TestExportedExceptions:

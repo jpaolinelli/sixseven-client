@@ -1,4 +1,4 @@
-"""Tests for advanced query builders (MATCH, SHORTEST PATH, validation)."""
+"""Tests for advanced query builders (MATCH, SHORTEST PATH, path selector, validation)."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import pytest
 from giodb.query_builders import (
     build_match,
     build_nearest,
+    build_shortest_match,
     build_shortest_path,
     build_traverse,
     _validate_positive_int,
@@ -69,15 +70,20 @@ class TestBuildNearestValidation:
         assert 'WITHIN TRAVERSE "follows"' in q["text"]
 
 
+# ---------------------------------------------------------------------------
+# MATCH builder (new SELECT...FROM MATCH syntax)
+# ---------------------------------------------------------------------------
+
+
 class TestBuildMatch:
-    def test_single_hop(self):
+    def test_single_hop_new_syntax(self):
         pattern = [
             MatchNode("a", "users"),
             MatchEdge("r", "follows", "OUT"),
             MatchNode("b", "users"),
         ]
         q = build_match(pattern, ["a", "b"])
-        assert q["text"] == 'MATCH (a:"users")-[r:"follows"]->(b:"users") RETURN a, b'
+        assert q["text"] == 'SELECT a, b FROM MATCH (a:"users")-[r:"follows"]->(b:"users")'
         assert q["values"] == []
 
     def test_multi_hop(self):
@@ -89,7 +95,7 @@ class TestBuildMatch:
             MatchNode("c", "posts"),
         ]
         q = build_match(pattern, ["a", "b", "c"])
-        expected = 'MATCH (a:"users")-[r1:"follows"]->(b:"users")-[r2:"likes"]->(c:"posts") RETURN a, b, c'
+        expected = 'SELECT a, b, c FROM MATCH (a:"users")-[r1:"follows"]->(b:"users")-[r2:"likes"]->(c:"posts")'
         assert q["text"] == expected
 
     def test_in_direction(self):
@@ -135,15 +141,159 @@ class TestBuildMatch:
         assert '"users""; DROP TABLE x; --"' in q["text"]
 
 
+# ---------------------------------------------------------------------------
+# MATCH builder — hop quantifiers
+# ---------------------------------------------------------------------------
+
+
+class TestBuildMatchQuantifiers:
+    def test_quantifier_range(self):
+        pattern = [
+            MatchNode("a", "users"),
+            MatchEdge("r", "follows", "OUT", quantifier="{2,5}"),
+            MatchNode("b", "users"),
+        ]
+        q = build_match(pattern, ["a", "b"])
+        assert '-[r:"follows"]->{2,5}' in q["text"]
+
+    def test_quantifier_plus(self):
+        pattern = [
+            MatchNode("a", "users"),
+            MatchEdge("r", "follows", "OUT", quantifier="+"),
+            MatchNode("b", "users"),
+        ]
+        q = build_match(pattern, ["a", "b"])
+        assert '-[r:"follows"]->+' in q["text"]
+
+    def test_quantifier_star(self):
+        pattern = [
+            MatchNode("a", "users"),
+            MatchEdge("r", "follows", "OUT", quantifier="*"),
+            MatchNode("b", "users"),
+        ]
+        q = build_match(pattern, ["a", "b"])
+        assert '-[r:"follows"]->*' in q["text"]
+
+    def test_quantifier_in_direction(self):
+        pattern = [
+            MatchNode("a", "users"),
+            MatchEdge("r", "follows", "IN", quantifier="{1,3}"),
+            MatchNode("b", "users"),
+        ]
+        q = build_match(pattern, ["a", "b"])
+        assert '<-[r:"follows"]-{1,3}' in q["text"]
+
+    def test_quantifier_both_direction(self):
+        pattern = [
+            MatchNode("a", "users"),
+            MatchEdge("r", "follows", "BOTH", quantifier="*"),
+            MatchNode("b", "users"),
+        ]
+        q = build_match(pattern, ["a", "b"])
+        assert '-[r:"follows"]-*' in q["text"]
+
+
+# ---------------------------------------------------------------------------
+# MATCH builder — cross-edge-type patterns
+# ---------------------------------------------------------------------------
+
+
+class TestBuildMatchCrossEdge:
+    def test_two_edge_types(self):
+        pattern = [
+            MatchNode("a", "users"),
+            MatchEdge("r", "follows", "OUT", edge_types=["follows", "likes"]),
+            MatchNode("b", "users"),
+        ]
+        q = build_match(pattern, ["a", "b"])
+        assert '-[r:"follows"|"likes"]->' in q["text"]
+
+    def test_three_edge_types(self):
+        pattern = [
+            MatchNode("a", "users"),
+            MatchEdge("r", "follows", "OUT", edge_types=["follows", "likes", "blocks"]),
+            MatchNode("b", "users"),
+        ]
+        q = build_match(pattern, ["a", "b"])
+        assert '-[r:"follows"|"likes"|"blocks"]->' in q["text"]
+
+    def test_cross_edge_with_quantifier(self):
+        pattern = [
+            MatchNode("a", "users"),
+            MatchEdge("r", "follows", "OUT", quantifier="{1,3}", edge_types=["follows", "likes"]),
+            MatchNode("b", "users"),
+        ]
+        q = build_match(pattern, ["a", "b"])
+        assert '-[r:"follows"|"likes"]->{1,3}' in q["text"]
+
+    def test_edge_types_overrides_edge_type(self):
+        pattern = [
+            MatchNode("a", "users"),
+            MatchEdge("r", "IGNORED", "OUT", edge_types=["real_edge"]),
+            MatchNode("b", "users"),
+        ]
+        q = build_match(pattern, ["a", "b"])
+        assert '"IGNORED"' not in q["text"]
+        assert '"real_edge"' in q["text"]
+
+
+# ---------------------------------------------------------------------------
+# MATCH builder — legacy backward compatibility
+# ---------------------------------------------------------------------------
+
+
+class TestBuildMatchLegacy:
+    def test_legacy_syntax(self):
+        pattern = [
+            MatchNode("a", "users"),
+            MatchEdge("r", "follows", "OUT"),
+            MatchNode("b", "users"),
+        ]
+        q = build_match(pattern, ["a", "b"], legacy_syntax=True)
+        assert q["text"] == 'MATCH (a:"users")-[r:"follows"]->(b:"users") RETURN a, b'
+        assert q["values"] == []
+
+    def test_legacy_syntax_with_where(self):
+        pattern = [
+            MatchNode("a", "users"),
+            MatchEdge("r", "follows", "OUT"),
+            MatchNode("b", "users"),
+        ]
+        q = build_match(pattern, ["a"], where="a.age > 18", legacy_syntax=True)
+        assert q["text"].startswith("MATCH ")
+        assert q["text"].endswith("WHERE a.age > 18")
+
+    def test_legacy_with_quantifiers(self):
+        pattern = [
+            MatchNode("a", "users"),
+            MatchEdge("r", "follows", "OUT", quantifier="{2,5}"),
+            MatchNode("b", "users"),
+        ]
+        q = build_match(pattern, ["a", "b"], legacy_syntax=True)
+        assert q["text"].startswith("MATCH ")
+        assert '-[r:"follows"]->{2,5}' in q["text"]
+        assert "RETURN a, b" in q["text"]
+
+
+# ---------------------------------------------------------------------------
+# SHORTEST PATH builder (SELECT composability)
+# ---------------------------------------------------------------------------
+
+
 class TestBuildShortestPath:
-    def test_basic(self):
+    def test_basic_new_syntax(self):
         q = build_shortest_path("follows", "users", 1, "users", 2)
-        assert q["text"] == 'SHORTEST PATH FROM "users"($1) TO "users"($2) VIA "follows"'
+        assert q["text"] == 'SELECT * FROM SHORTEST PATH FROM "users"($1) TO "users"($2) VIA "follows"'
         assert q["values"] == [1, 2]
+
+    def test_custom_select(self):
+        q = build_shortest_path("follows", "users", 1, "users", 2, select="path, cost")
+        assert q["text"].startswith("SELECT path, cost FROM SHORTEST PATH")
 
     def test_with_direction(self):
         q = build_shortest_path("follows", "users", 1, "users", 2, direction="OUT")
         assert "DIRECTION OUT" in q["text"]
+        assert q["text"].startswith("SELECT * FROM")
 
     def test_with_max_depth(self):
         q = build_shortest_path("follows", "users", 1, "users", 2, max_depth=5)
@@ -157,3 +307,141 @@ class TestBuildShortestPath:
         q = build_shortest_path("works_at", "users", 1, "companies", 5)
         assert '"users"($1)' in q["text"]
         assert '"companies"($2)' in q["text"]
+
+    def test_legacy_syntax(self):
+        q = build_shortest_path("follows", "users", 1, "users", 2, legacy_syntax=True)
+        assert q["text"] == 'SHORTEST PATH FROM "users"($1) TO "users"($2) VIA "follows"'
+        assert not q["text"].startswith("SELECT")
+
+    def test_legacy_with_options(self):
+        q = build_shortest_path(
+            "follows", "users", 1, "users", 2,
+            direction="OUT", max_depth=5, legacy_syntax=True,
+        )
+        assert q["text"].startswith("SHORTEST PATH FROM")
+        assert "DIRECTION OUT" in q["text"]
+        assert "MAX_DEPTH 5" in q["text"]
+
+
+# ---------------------------------------------------------------------------
+# Path selector builder (build_shortest_match)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildShortestMatch:
+    def test_any_shortest(self):
+        pattern = [
+            MatchNode("a", "users"),
+            MatchEdge("r", "follows", "OUT"),
+            MatchNode("b", "users"),
+        ]
+        q = build_shortest_match(pattern, ["a", "b"], selector="ANY SHORTEST")
+        assert q["text"] == 'SELECT a, b FROM MATCH ANY SHORTEST (a:"users")-[r:"follows"]->(b:"users")'
+
+    def test_all_shortest(self):
+        pattern = [
+            MatchNode("a", "users"),
+            MatchEdge("r", "follows", "OUT"),
+            MatchNode("b", "users"),
+        ]
+        q = build_shortest_match(pattern, ["a", "b"], selector="ALL SHORTEST")
+        assert "MATCH ALL SHORTEST" in q["text"]
+
+    def test_shortest_k(self):
+        pattern = [
+            MatchNode("a", "users"),
+            MatchEdge("r", "follows", "OUT"),
+            MatchNode("b", "users"),
+        ]
+        q = build_shortest_match(pattern, ["a", "b"], selector="SHORTEST", k=3)
+        assert "MATCH SHORTEST 3" in q["text"]
+
+    def test_shortest_k_missing_raises(self):
+        pattern = [
+            MatchNode("a", "users"),
+            MatchEdge("r", "follows", "OUT"),
+            MatchNode("b", "users"),
+        ]
+        with pytest.raises(ValueError, match="k is required"):
+            build_shortest_match(pattern, ["a", "b"], selector="SHORTEST")
+
+    def test_invalid_k_raises(self):
+        pattern = [
+            MatchNode("a", "users"),
+            MatchEdge("r", "follows", "OUT"),
+            MatchNode("b", "users"),
+        ]
+        with pytest.raises(ValueError, match="positive integer"):
+            build_shortest_match(pattern, ["a", "b"], selector="SHORTEST", k=-1)
+
+    def test_invalid_selector_raises(self):
+        pattern = [
+            MatchNode("a", "users"),
+            MatchEdge("r", "follows", "OUT"),
+            MatchNode("b", "users"),
+        ]
+        with pytest.raises(ValueError, match="selector"):
+            build_shortest_match(pattern, ["a", "b"], selector="BOGUS")
+
+    def test_weight_clause(self):
+        pattern = [
+            MatchNode("a", "users"),
+            MatchEdge("r", "follows", "OUT"),
+            MatchNode("b", "users"),
+        ]
+        q = build_shortest_match(
+            pattern, ["a", "b"],
+            selector="ANY SHORTEST",
+            weight="r.cost",
+        )
+        assert q["text"].endswith("WEIGHT r.cost")
+
+    def test_with_where(self):
+        pattern = [
+            MatchNode("a", "users"),
+            MatchEdge("r", "follows", "OUT"),
+            MatchNode("b", "users"),
+        ]
+        q = build_shortest_match(
+            pattern, ["a", "b"],
+            selector="ANY SHORTEST",
+            where="a.active = true",
+        )
+        assert q["text"].endswith("WHERE a.active = true")
+
+    def test_weight_and_where(self):
+        pattern = [
+            MatchNode("a", "users"),
+            MatchEdge("r", "follows", "OUT"),
+            MatchNode("b", "users"),
+        ]
+        q = build_shortest_match(
+            pattern, ["a", "b"],
+            selector="ANY SHORTEST",
+            weight="r.cost",
+            where="a.active = true",
+        )
+        assert "WEIGHT r.cost" in q["text"]
+        assert q["text"].endswith("WHERE a.active = true")
+
+    def test_empty_pattern_raises(self):
+        with pytest.raises(ValueError, match="empty"):
+            build_shortest_match([], ["a"], selector="ANY SHORTEST")
+
+    def test_default_selector_is_any_shortest(self):
+        pattern = [
+            MatchNode("a", "users"),
+            MatchEdge("r", "follows", "OUT"),
+            MatchNode("b", "users"),
+        ]
+        q = build_shortest_match(pattern, ["a", "b"])
+        assert "MATCH ANY SHORTEST" in q["text"]
+
+    def test_case_insensitive_selector(self):
+        pattern = [
+            MatchNode("a", "users"),
+            MatchEdge("r", "follows", "OUT"),
+            MatchNode("b", "users"),
+        ]
+        q = build_shortest_match(pattern, ["a", "b"], selector="any shortest")
+        assert "MATCH ANY SHORTEST" in q["text"]

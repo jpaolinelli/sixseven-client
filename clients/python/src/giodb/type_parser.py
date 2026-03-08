@@ -13,6 +13,8 @@ from typing import Any, Callable
 
 import numpy as np
 
+from .types import Path, PathEdge, PathNode
+
 
 # ---------------------------------------------------------------------------
 # Type OID constants (matching server's pg_type catalog)
@@ -44,6 +46,7 @@ class TypeOID:
     JSON = 114
     UUID = 2950
     EMBEDDING = 100000
+    PATH = 100006
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +133,44 @@ def _parse_bytea(value: str) -> bytes:
     return value.encode("utf-8")
 
 
+def _parse_path(value: str) -> Path:
+    """Parse a Path value from the wire protocol.
+
+    The wire format is a JSON array alternating [node, edge, node, ...].
+    Each node is ``{"table": str, "id": any, ...extra props}``.
+    Each edge is ``{"edge_type": str, "from_id": any, "to_id": any, ...extra props}``.
+    """
+    data = json.loads(value)
+    if not isinstance(data, list):
+        raise ValueError(f"Path must be a JSON array, got {type(data).__name__}")
+
+    nodes: list[PathNode] = []
+    edges: list[PathEdge] = []
+
+    for i, element in enumerate(data):
+        if i % 2 == 0:
+            # node
+            props = {k: v for k, v in element.items() if k not in ("table", "id")}
+            nodes.append(PathNode(table=element["table"], id=element["id"], properties=props))
+        else:
+            # edge
+            props = {
+                k: v
+                for k, v in element.items()
+                if k not in ("edge_type", "from_id", "to_id")
+            }
+            edges.append(
+                PathEdge(
+                    edge_type=element["edge_type"],
+                    from_id=element["from_id"],
+                    to_id=element["to_id"],
+                    properties=props,
+                )
+            )
+
+    return Path(_nodes=nodes, _edges=edges)
+
+
 def parse_embedding(value: str) -> np.ndarray:
     """Parse a text-format embedding '[0.1,0.2,0.3]' into a numpy float32 array."""
     stripped = value.strip()
@@ -176,6 +217,7 @@ _PARSERS: dict[int, Callable[[str], Any]] = {
     TypeOID.BYTEA: _parse_bytea,
     TypeOID.BLOB: _parse_bytea,
     TypeOID.EMBEDDING: parse_embedding,
+    TypeOID.PATH: _parse_path,
     # TEXT, VARCHAR, CHAR: fall through to raw string (no parser needed)
 }
 
