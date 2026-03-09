@@ -164,4 +164,109 @@ public class TypeParserTests
         Assert.IsType<string>(result);
         Assert.Equal("some value", result);
     }
+
+    // -------------------------------------------------------------------
+    // Path parsing tests
+    // -------------------------------------------------------------------
+
+    [Fact]
+    public void ParsePath_SimpleNodeEdgeNode_ReturnsCorrectPath()
+    {
+        var json = """
+        [
+            {"table":"users","id":1,"name":"Alice"},
+            {"edge_type":"follows","from_id":1,"to_id":2},
+            {"table":"users","id":2,"name":"Bob"}
+        ]
+        """;
+
+        var path = TypeParser.ParsePath(json);
+
+        Assert.Equal(2, path.Nodes.Count);
+        Assert.Single(path.Edges);
+        Assert.Equal(1, path.PathLength);
+
+        Assert.Equal("users", path.Nodes[0].Table);
+        Assert.Equal(1L, path.Nodes[0].Id);
+        Assert.Equal("Alice", path.Nodes[0].Properties["name"]);
+
+        Assert.Equal("follows", path.Edges[0].EdgeType);
+        Assert.Equal(1L, path.Edges[0].FromId);
+        Assert.Equal(2L, path.Edges[0].ToId);
+
+        Assert.Equal("users", path.Nodes[1].Table);
+        Assert.Equal(2L, path.Nodes[1].Id);
+        Assert.Equal("Bob", path.Nodes[1].Properties["name"]);
+    }
+
+    [Fact]
+    public void ParsePath_MultiHopPath_ReturnsAllNodesAndEdges()
+    {
+        var json = """
+        [
+            {"table":"users","id":1},
+            {"edge_type":"follows","from_id":1,"to_id":2},
+            {"table":"users","id":2},
+            {"edge_type":"follows","from_id":2,"to_id":3},
+            {"table":"users","id":3}
+        ]
+        """;
+
+        var path = TypeParser.ParsePath(json);
+
+        Assert.Equal(3, path.Nodes.Count);
+        Assert.Equal(2, path.Edges.Count);
+        Assert.Equal(2, path.PathLength);
+    }
+
+    [Fact]
+    public void ParsePath_SingleNode_NoEdges()
+    {
+        var json = """[{"table":"users","id":1}]""";
+
+        var path = TypeParser.ParsePath(json);
+
+        Assert.Single(path.Nodes);
+        Assert.Empty(path.Edges);
+        Assert.Equal(0, path.PathLength);
+    }
+
+    [Fact]
+    public void ParsePath_EmptyArray_ReturnsEmptyPath()
+    {
+        var path = TypeParser.ParsePath("[]");
+
+        Assert.Empty(path.Nodes);
+        Assert.Empty(path.Edges);
+        Assert.Equal(0, path.PathLength);
+    }
+
+    [Fact]
+    public void ParsePath_EdgeWithProperties_PropertiesPreserved()
+    {
+        var json = """
+        [
+            {"table":"users","id":1},
+            {"edge_type":"follows","from_id":1,"to_id":2,"weight":0.5,"since":"2024-01-01"},
+            {"table":"users","id":2}
+        ]
+        """;
+
+        var path = TypeParser.ParsePath(json);
+
+        Assert.Equal(0.5, path.Edges[0].Properties["weight"]);
+        Assert.Equal("2024-01-01", path.Edges[0].Properties["since"]);
+    }
+
+    [Fact]
+    public void ParseValue_Path_ReturnsGraphPath()
+    {
+        var json = """[{"table":"users","id":1},{"edge_type":"follows","from_id":1,"to_id":2},{"table":"users","id":2}]""";
+        var result = TypeParser.ParseValue(json, TypeOid.Path);
+
+        Assert.IsType<GraphPath>(result);
+        var path = (GraphPath)result!;
+        Assert.Equal(2, path.Nodes.Count);
+        Assert.Single(path.Edges);
+    }
 }

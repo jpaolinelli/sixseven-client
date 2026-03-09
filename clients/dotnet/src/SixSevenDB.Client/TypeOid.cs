@@ -21,4 +21,5 @@ public static class TypeOid
     public const int Jsonb = 3802;
     public const int Uuid = 2950;
     public const int Embedding = 100000;
+    public const int Path = 100006;
 }
