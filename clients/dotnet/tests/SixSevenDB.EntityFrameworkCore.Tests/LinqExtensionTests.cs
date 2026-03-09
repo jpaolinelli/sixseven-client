@@ -50,4 +50,48 @@ public class LinqExtensionTests
         Assert.Contains("VIA \"follows\"", result.Text);
         Assert.Equal(2, result.Values.Length);
     }
+
+    [Fact]
+    public void Match_GeneratesCorrectSql()
+    {
+        var pattern = new object[]
+        {
+            new MatchNode { Alias = "a", Table = "users" },
+            new MatchEdge { Alias = "r", EdgeType = "follows", Direction = "OUT" },
+            new MatchNode { Alias = "b", Table = "users" }
+        };
+        var result = SixSevenDbLinqExtensions.Match(pattern,
+            new MatchOptions { ReturnItems = ["a", "b"] });
+
+        Assert.Contains("SELECT a, b FROM MATCH", result.Text);
+        Assert.Contains("\"users\"", result.Text);
+        Assert.Empty(result.Values);
+    }
+
+    [Fact]
+    public void ShortestMatch_GeneratesCorrectSql()
+    {
+        var pattern = new object[]
+        {
+            new MatchNode { Alias = "a", Table = "users" },
+            new MatchEdge { Alias = "r", EdgeType = "follows", Direction = "OUT" },
+            new MatchNode { Alias = "b", Table = "users" }
+        };
+        var result = SixSevenDbLinqExtensions.ShortestMatch(
+            pattern, ["a", "b"], ShortestMatchSelector.AnyShortest);
+
+        Assert.Contains("ANY SHORTEST", result.Text);
+        Assert.Contains("SELECT a, b FROM MATCH", result.Text);
+    }
+
+    [Fact]
+    public void ShortestPath_GeneratesCorrectSql()
+    {
+        var result = SixSevenDbLinqExtensions.ShortestPath(
+            "follows", "users", 1, "users", 2);
+
+        Assert.Contains("SELECT * FROM SHORTEST PATH", result.Text);
+        Assert.Contains("\"users\"($1) TO \"users\"($2)", result.Text);
+        Assert.Equal(2, result.Values.Length);
+    }
 }
