@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { quoteIdent } from "@/lib/schema-utils";
 import type { ConnectionParams } from "@/lib/connection-types";
+import type { AlgorithmId } from "@/lib/algorithm-types";
+import { getAlgorithm } from "@/lib/algorithm-types";
+import { buildAlgorithmSQL } from "@/lib/algorithm-utils";
 
 /**
  * POST /api/graph — Execute graph traversal or shortest-path queries.
@@ -32,6 +35,8 @@ export async function POST(request: NextRequest) {
         return await handleShortestPath(body, database, conn);
       case "node_details":
         return await handleNodeDetails(body, database, conn);
+      case "algorithm":
+        return await handleAlgorithm(body, database, conn);
       default:
         return NextResponse.json(
           { error: `Unknown action: ${action}` },
@@ -115,6 +120,36 @@ async function handleNodeDetails(
 
   const sql = `SELECT * FROM ${quoteIdent(table)} WHERE id = ${quoteLiteral(id)}`;
 
+  const result = await query(sql, database, conn);
+  return NextResponse.json(result);
+}
+
+async function handleAlgorithm(
+  body: {
+    algorithm: AlgorithmId;
+    params?: Record<string, string | number>;
+  },
+  database: string,
+  conn?: ConnectionParams
+) {
+  const { algorithm: algorithmId, params: algoParams = {} } = body;
+
+  if (!algorithmId) {
+    return NextResponse.json(
+      { error: "Missing 'algorithm'" },
+      { status: 400 }
+    );
+  }
+
+  const algo = getAlgorithm(algorithmId);
+  if (!algo) {
+    return NextResponse.json(
+      { error: `Unknown algorithm: ${algorithmId}` },
+      { status: 400 }
+    );
+  }
+
+  const sql = buildAlgorithmSQL(algo, database, algoParams);
   const result = await query(sql, database, conn);
   return NextResponse.json(result);
 }
