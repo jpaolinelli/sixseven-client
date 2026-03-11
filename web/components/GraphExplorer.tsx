@@ -24,6 +24,7 @@ import {
 } from "@/lib/graph-utils";
 import { useConnection } from "@/lib/ConnectionContext";
 import type { EdgeTypeInfo } from "@/lib/types";
+import { AlgorithmPanel } from "@/components/AlgorithmPanel";
 
 interface GraphExplorerProps {
   databases: string[];
@@ -63,6 +64,8 @@ export function GraphExplorer({
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sidebarTab, setSidebarTab] = useState<"filters" | "algorithms">("filters");
+  const [algorithmColors, setAlgorithmColors] = useState<Map<string, string> | null>(null);
 
   // Start node input
   const [startTable, setStartTable] = useState("");
@@ -175,20 +178,23 @@ export function GraphExplorer({
 
       if (!isMounted || !containerRef.current) return;
 
-      const visNodes = visibleNodes.map((n) => ({
-        id: n.id,
-        label: n.label,
-        color: {
-          background: highlightedPath.has(n.id)
-            ? "#f59e0b"
-            : tableColor(n.table),
-          border: selectedNodes.includes(n.id) ? "#ffffff" : "#374151",
-          highlight: { background: "#60a5fa", border: "#ffffff" },
-          hover: { background: "#93c5fd", border: "#ffffff" },
-        },
-        borderWidth: selectedNodes.includes(n.id) ? 3 : 2,
-        size: highlightedPath.has(n.id) ? 24 : n.expanded ? 22 : 18,
-      }));
+      const visNodes = visibleNodes.map((n) => {
+        const algoColor = algorithmColors?.get(n.id);
+        return {
+          id: n.id,
+          label: n.label,
+          color: {
+            background: highlightedPath.has(n.id)
+              ? "#f59e0b"
+              : algoColor ?? tableColor(n.table),
+            border: selectedNodes.includes(n.id) ? "#ffffff" : "#374151",
+            highlight: { background: "#60a5fa", border: "#ffffff" },
+            hover: { background: "#93c5fd", border: "#ffffff" },
+          },
+          borderWidth: selectedNodes.includes(n.id) ? 3 : 2,
+          size: highlightedPath.has(n.id) ? 24 : algoColor ? 22 : n.expanded ? 22 : 18,
+        };
+      });
 
       const visEdgeList = visibleEdges.map((e) => ({
         id: e.id,
@@ -272,7 +278,7 @@ export function GraphExplorer({
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visibleNodes, visibleEdges, highlightedPath, highlightedEdges, selectedNodes, networkOptions, layout]);
+  }, [visibleNodes, visibleEdges, highlightedPath, highlightedEdges, selectedNodes, networkOptions, layout, algorithmColors]);
 
   const handleNodeClick = useCallback(
     (nodeId: string, shift: boolean) => {
@@ -771,114 +777,148 @@ export function GraphExplorer({
           )}
         </div>
 
-        {/* Right sidebar: filters + details */}
-        <div className="w-56 border-l border-gray-800 flex flex-col overflow-y-auto bg-gray-900/30">
-          {/* Legend */}
-          {graphTables.length > 0 && (
-            <div className="p-2 border-b border-gray-800">
-              <div className="text-xs text-gray-500 mb-1 font-medium">
-                Tables
-              </div>
-              {graphTables.map((t) => (
-                <div key={t} className="flex items-center gap-1.5 py-0.5">
-                  <span
-                    className="w-2.5 h-2.5 rounded-full shrink-0"
-                    style={{ backgroundColor: tableColor(t) }}
-                  />
-                  <span className="text-xs text-gray-300 truncate">{t}</span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Edge type filter */}
-          {graphEdgeTypes.length > 0 && (
-            <div className="p-2 border-b border-gray-800">
-              <div className="text-xs text-gray-500 mb-1 font-medium">
-                Edge Types
-              </div>
-              {graphEdgeTypes.map((et) => (
-                <label
-                  key={et}
-                  className="flex items-center gap-1.5 py-0.5 cursor-pointer"
-                >
-                  <input
-                    type="checkbox"
-                    checked={
-                      filters.visibleEdgeTypes.size === 0 ||
-                      filters.visibleEdgeTypes.has(et)
-                    }
-                    onChange={() => toggleEdgeTypeFilter(et)}
-                    className="w-3 h-3 rounded accent-blue-500"
-                  />
-                  <span className="text-xs text-gray-300">{et}</span>
-                </label>
-              ))}
-            </div>
-          )}
-
-          {/* Depth filter */}
-          <div className="p-2 border-b border-gray-800">
-            <div className="text-xs text-gray-500 mb-1 font-medium">
-              Max Depth: {filters.maxDepth}
-            </div>
-            <input
-              type="range"
-              min={1}
-              max={10}
-              value={filters.maxDepth}
-              onChange={(e) =>
-                setFilters((prev) => ({
-                  ...prev,
-                  maxDepth: parseInt(e.target.value, 10),
-                }))
-              }
-              className="w-full accent-blue-500"
-            />
+        {/* Right sidebar: tabs for filters vs algorithms */}
+        <div className="w-56 border-l border-gray-800 flex flex-col overflow-hidden bg-gray-900/30">
+          {/* Tab bar */}
+          <div className="flex border-b border-gray-800">
+            <button
+              onClick={() => setSidebarTab("filters")}
+              className={`flex-1 px-2 py-1.5 text-xs font-medium ${
+                sidebarTab === "filters"
+                  ? "text-blue-400 border-b-2 border-blue-400"
+                  : "text-gray-500 hover:text-gray-300"
+              }`}
+            >
+              Filters
+            </button>
+            <button
+              onClick={() => setSidebarTab("algorithms")}
+              className={`flex-1 px-2 py-1.5 text-xs font-medium ${
+                sidebarTab === "algorithms"
+                  ? "text-blue-400 border-b-2 border-blue-400"
+                  : "text-gray-500 hover:text-gray-300"
+              }`}
+            >
+              Algorithms
+            </button>
           </div>
 
-          {/* Node details */}
-          {detailNode && (
-            <div className="p-2 flex-1">
-              <div className="text-xs text-gray-500 mb-1 font-medium">
-                Node Details
-              </div>
-              <div className="text-xs text-blue-400 mb-2">
-                {detailNode.node.table}:{detailNode.node.pk}
-              </div>
-              <div className="space-y-1">
-                {Object.entries(detailNode.data).map(([key, value]) => (
-                  <div key={key}>
-                    <span className="text-xs text-gray-500">{key}: </span>
-                    <span className="text-xs text-gray-300">
-                      {value === null ? "null" : String(value)}
-                    </span>
+          {sidebarTab === "filters" ? (
+            <div className="flex-1 overflow-y-auto">
+              {/* Legend */}
+              {graphTables.length > 0 && (
+                <div className="p-2 border-b border-gray-800">
+                  <div className="text-xs text-gray-500 mb-1 font-medium">
+                    Tables
                   </div>
-                ))}
-              </div>
-            </div>
-          )}
+                  {graphTables.map((t) => (
+                    <div key={t} className="flex items-center gap-1.5 py-0.5">
+                      <span
+                        className="w-2.5 h-2.5 rounded-full shrink-0"
+                        style={{ backgroundColor: tableColor(t) }}
+                      />
+                      <span className="text-xs text-gray-300 truncate">{t}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
 
-          {/* Selection info */}
-          {selectedNodes.length > 0 && !detailNode && (
-            <div className="p-2">
-              <div className="text-xs text-gray-500 mb-1 font-medium">
-                Selected ({selectedNodes.length})
-              </div>
-              {selectedNodes.map((id) => {
-                const { table, pk } = parseNodeId(id);
-                return (
-                  <div key={id} className="text-xs text-gray-300 py-0.5">
-                    {table}:{pk}
+              {/* Edge type filter */}
+              {graphEdgeTypes.length > 0 && (
+                <div className="p-2 border-b border-gray-800">
+                  <div className="text-xs text-gray-500 mb-1 font-medium">
+                    Edge Types
                   </div>
-                );
-              })}
-              {selectedNodes.length === 2 && (
-                <p className="text-xs text-amber-400 mt-1">
-                  Click &quot;Find Path&quot; to highlight shortest path
-                </p>
+                  {graphEdgeTypes.map((et) => (
+                    <label
+                      key={et}
+                      className="flex items-center gap-1.5 py-0.5 cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={
+                          filters.visibleEdgeTypes.size === 0 ||
+                          filters.visibleEdgeTypes.has(et)
+                        }
+                        onChange={() => toggleEdgeTypeFilter(et)}
+                        className="w-3 h-3 rounded accent-blue-500"
+                      />
+                      <span className="text-xs text-gray-300">{et}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+
+              {/* Depth filter */}
+              <div className="p-2 border-b border-gray-800">
+                <div className="text-xs text-gray-500 mb-1 font-medium">
+                  Max Depth: {filters.maxDepth}
+                </div>
+                <input
+                  type="range"
+                  min={1}
+                  max={10}
+                  value={filters.maxDepth}
+                  onChange={(e) =>
+                    setFilters((prev) => ({
+                      ...prev,
+                      maxDepth: parseInt(e.target.value, 10),
+                    }))
+                  }
+                  className="w-full accent-blue-500"
+                />
+              </div>
+
+              {/* Node details */}
+              {detailNode && (
+                <div className="p-2 flex-1">
+                  <div className="text-xs text-gray-500 mb-1 font-medium">
+                    Node Details
+                  </div>
+                  <div className="text-xs text-blue-400 mb-2">
+                    {detailNode.node.table}:{detailNode.node.pk}
+                  </div>
+                  <div className="space-y-1">
+                    {Object.entries(detailNode.data).map(([key, value]) => (
+                      <div key={key}>
+                        <span className="text-xs text-gray-500">{key}: </span>
+                        <span className="text-xs text-gray-300">
+                          {value === null ? "null" : String(value)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Selection info */}
+              {selectedNodes.length > 0 && !detailNode && (
+                <div className="p-2">
+                  <div className="text-xs text-gray-500 mb-1 font-medium">
+                    Selected ({selectedNodes.length})
+                  </div>
+                  {selectedNodes.map((id) => {
+                    const { table, pk } = parseNodeId(id);
+                    return (
+                      <div key={id} className="text-xs text-gray-300 py-0.5">
+                        {table}:{pk}
+                      </div>
+                    );
+                  })}
+                  {selectedNodes.length === 2 && (
+                    <p className="text-xs text-amber-400 mt-1">
+                      Click &quot;Find Path&quot; to highlight shortest path
+                    </p>
+                  )}
+                </div>
               )}
             </div>
+          ) : (
+            <AlgorithmPanel
+              database={database}
+              onApplyHeatMap={setAlgorithmColors}
+              tables={graphTables}
+            />
           )}
         </div>
       </div>
