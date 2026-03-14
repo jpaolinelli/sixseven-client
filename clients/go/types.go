@@ -287,19 +287,45 @@ func parseInterval(s string) (Interval, error) {
 	var iv Interval
 	s = strings.TrimSpace(s)
 
-	// Handle "HH:MM:SS" format
-	if strings.Contains(s, ":") && !strings.Contains(strings.ToLower(s), "day") {
-		return parseIntervalTime(s)
-	}
-
 	lower := strings.ToLower(s)
-	if strings.Contains(lower, "day") {
-		dayPart := strings.SplitN(lower, "day", 2)
-		d, err := strconv.Atoi(strings.TrimSpace(dayPart[0]))
-		if err == nil {
-			iv.Days = d
+
+	// Check if the string contains named components (years, months, days)
+	hasNamedComponents := strings.Contains(lower, "year") ||
+		strings.Contains(lower, "month") ||
+		strings.Contains(lower, "day")
+
+	if hasNamedComponents {
+		rest := lower
+
+		// Extract years
+		if idx := strings.Index(rest, "year"); idx >= 0 {
+			numStr := strings.TrimSpace(rest[:idx])
+			if v, err := strconv.Atoi(numStr); err == nil {
+				iv.Years = v
+			}
+			rest = strings.TrimLeft(rest[idx+4:], "s ")
 		}
-		rest := strings.TrimLeft(dayPart[1], "s ")
+
+		// Extract months
+		if idx := strings.Index(rest, "month"); idx >= 0 {
+			numStr := strings.TrimSpace(rest[:idx])
+			if v, err := strconv.Atoi(numStr); err == nil {
+				iv.Months = v
+			}
+			rest = strings.TrimLeft(rest[idx+5:], "s ")
+		}
+
+		// Extract days
+		if idx := strings.Index(rest, "day"); idx >= 0 {
+			numStr := strings.TrimSpace(rest[:idx])
+			if v, err := strconv.Atoi(numStr); err == nil {
+				iv.Days = v
+			}
+			rest = strings.TrimLeft(rest[idx+3:], "s ")
+		}
+
+		// Parse remaining time component (HH:MM:SS)
+		rest = strings.TrimSpace(rest)
 		if rest != "" && strings.Contains(rest, ":") {
 			timeIv, err := parseIntervalTime(rest)
 			if err == nil {
@@ -308,7 +334,13 @@ func parseInterval(s string) (Interval, error) {
 				iv.Seconds = timeIv.Seconds
 			}
 		}
+
 		return iv, nil
+	}
+
+	// Handle pure "HH:MM:SS" format
+	if strings.Contains(s, ":") {
+		return parseIntervalTime(s)
 	}
 
 	// Try as raw seconds

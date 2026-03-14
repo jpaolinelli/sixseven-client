@@ -74,4 +74,16 @@ pub use query_builders::{
     quote_identifier, LinkProperties, NearestOptions, TraverseOptions,
 };
 pub use transaction::{IsolationLevel, Transaction, TransactionOptions};
-pub use types::{Embedding, Interval, Value};
+pub use types::{Embedding, FromValue, Interval, Value};
+
+// Re-export the derive macro
+pub use sixsevendb_derive::FromRow;
+
+/// Trait for deserializing a row of `Value`s into a typed struct.
+/// Use `#[derive(FromRow)]` to auto-implement this.
+pub trait FromRow: Sized {
+    fn from_row(
+        fields: &[crate::protocol::FieldDescription],
+        row: &[Value],
+    ) -> Result<Self>;
+}

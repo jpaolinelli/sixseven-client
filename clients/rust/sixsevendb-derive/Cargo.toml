@@ -1,0 +1,14 @@
+[package]
+name = "sixsevendb-derive"
+version = "0.1.0"
+edition = "2021"
+description = "Derive macros for SixSevenDB Rust client"
+license = "MIT"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"

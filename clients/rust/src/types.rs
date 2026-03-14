@@ -373,6 +373,131 @@ pub fn format_uuid(uuid: &uuid::Uuid) -> String {
     uuid.to_string()
 }
 
+/// Trait for converting a `Value` into a concrete Rust type.
+pub trait FromValue: Sized {
+    fn from_value(value: Value) -> std::result::Result<Self, String>;
+}
+
+impl FromValue for i8 {
+    fn from_value(value: Value) -> std::result::Result<Self, String> {
+        match value { Value::TinyInt(v) => Ok(v), v => Err(format!("expected TinyInt, got {v:?}")) }
+    }
+}
+
+impl FromValue for i16 {
+    fn from_value(value: Value) -> std::result::Result<Self, String> {
+        match value { Value::Int2(v) => Ok(v), v => Err(format!("expected Int2, got {v:?}")) }
+    }
+}
+
+impl FromValue for i32 {
+    fn from_value(value: Value) -> std::result::Result<Self, String> {
+        match value { Value::Int4(v) => Ok(v), v => Err(format!("expected Int4, got {v:?}")) }
+    }
+}
+
+impl FromValue for i64 {
+    fn from_value(value: Value) -> std::result::Result<Self, String> {
+        match value { Value::Int8(v) => Ok(v), v => Err(format!("expected Int8, got {v:?}")) }
+    }
+}
+
+impl FromValue for u8 {
+    fn from_value(value: Value) -> std::result::Result<Self, String> {
+        match value { Value::UInt8(v) => Ok(v), v => Err(format!("expected UInt8, got {v:?}")) }
+    }
+}
+
+impl FromValue for u16 {
+    fn from_value(value: Value) -> std::result::Result<Self, String> {
+        match value { Value::UInt16(v) => Ok(v), v => Err(format!("expected UInt16, got {v:?}")) }
+    }
+}
+
+impl FromValue for u32 {
+    fn from_value(value: Value) -> std::result::Result<Self, String> {
+        match value { Value::UInt32(v) => Ok(v), v => Err(format!("expected UInt32, got {v:?}")) }
+    }
+}
+
+impl FromValue for u64 {
+    fn from_value(value: Value) -> std::result::Result<Self, String> {
+        match value { Value::UInt64(v) => Ok(v), v => Err(format!("expected UInt64, got {v:?}")) }
+    }
+}
+
+impl FromValue for f32 {
+    fn from_value(value: Value) -> std::result::Result<Self, String> {
+        match value { Value::Float4(v) => Ok(v), v => Err(format!("expected Float4, got {v:?}")) }
+    }
+}
+
+impl FromValue for f64 {
+    fn from_value(value: Value) -> std::result::Result<Self, String> {
+        match value { Value::Float8(v) => Ok(v), v => Err(format!("expected Float8, got {v:?}")) }
+    }
+}
+
+impl FromValue for bool {
+    fn from_value(value: Value) -> std::result::Result<Self, String> {
+        match value { Value::Bool(v) => Ok(v), v => Err(format!("expected Bool, got {v:?}")) }
+    }
+}
+
+impl FromValue for String {
+    fn from_value(value: Value) -> std::result::Result<Self, String> {
+        match value {
+            Value::Text(v) | Value::Numeric(v) | Value::Time(v) | Value::Json(v) => Ok(v),
+            v => Err(format!("expected text-like value, got {v:?}")),
+        }
+    }
+}
+
+impl FromValue for Vec<u8> {
+    fn from_value(value: Value) -> std::result::Result<Self, String> {
+        match value { Value::Bytes(v) => Ok(v), v => Err(format!("expected Bytes, got {v:?}")) }
+    }
+}
+
+impl FromValue for chrono::NaiveDate {
+    fn from_value(value: Value) -> std::result::Result<Self, String> {
+        match value { Value::Date(v) => Ok(v), v => Err(format!("expected Date, got {v:?}")) }
+    }
+}
+
+impl FromValue for chrono::NaiveDateTime {
+    fn from_value(value: Value) -> std::result::Result<Self, String> {
+        match value { Value::Timestamp(v) => Ok(v), v => Err(format!("expected Timestamp, got {v:?}")) }
+    }
+}
+
+impl FromValue for uuid::Uuid {
+    fn from_value(value: Value) -> std::result::Result<Self, String> {
+        match value { Value::Uuid(v) => Ok(v), v => Err(format!("expected Uuid, got {v:?}")) }
+    }
+}
+
+impl FromValue for Embedding {
+    fn from_value(value: Value) -> std::result::Result<Self, String> {
+        match value { Value::Embedding(v) => Ok(v), v => Err(format!("expected Embedding, got {v:?}")) }
+    }
+}
+
+impl FromValue for Interval {
+    fn from_value(value: Value) -> std::result::Result<Self, String> {
+        match value { Value::Interval(v) => Ok(v), v => Err(format!("expected Interval, got {v:?}")) }
+    }
+}
+
+impl<T: FromValue> FromValue for Option<T> {
+    fn from_value(value: Value) -> std::result::Result<Self, String> {
+        match value {
+            Value::Null => Ok(None),
+            v => T::from_value(v).map(Some),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

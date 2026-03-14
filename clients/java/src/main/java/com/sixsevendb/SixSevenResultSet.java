@@ -34,6 +34,7 @@ public class SixSevenResultSet implements ResultSet {
             pos++;
             return true;
         }
+        pos = rows.size();
         return false;
     }
 
