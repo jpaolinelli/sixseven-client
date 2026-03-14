@@ -73,6 +73,12 @@ public final class SixSevenQuery {
         return new MatchBuilder();
     }
 
+    // --- SHORTEST MATCH ---
+
+    public static ShortestMatchBuilder shortestMatch() {
+        return new ShortestMatchBuilder();
+    }
+
     // --- SHORTEST PATH ---
 
     public static ShortestPathBuilder shortestPath(String edgeType, String fromTable, Object fromID,

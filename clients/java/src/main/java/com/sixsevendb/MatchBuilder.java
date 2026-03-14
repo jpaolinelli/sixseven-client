@@ -54,6 +54,9 @@ public final class MatchBuilder {
         if (elements.isEmpty()) {
             throw new IllegalArgumentException("MATCH pattern must not be empty");
         }
+        if (returnItems.isEmpty()) {
+            throw new IllegalArgumentException("MATCH query must have at least one return item");
+        }
 
         StringBuilder patternStr = new StringBuilder();
         for (PatternElement elem : elements) {

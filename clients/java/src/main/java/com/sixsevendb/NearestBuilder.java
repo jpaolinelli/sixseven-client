@@ -48,6 +48,9 @@ public final class NearestBuilder {
 
     public PreparedQuery build() {
         SixSevenQuery.validatePositiveInt(k, "k");
+        if (queryVec == null) {
+            throw new IllegalArgumentException("queryVec must not be null");
+        }
 
         String queryStr;
         if (queryVec instanceof Embedding) {

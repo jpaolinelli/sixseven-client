@@ -87,9 +87,13 @@ public class SixSevenResultSetMetaData implements ResultSetMetaData {
         switch (typeOID) {
             case TypeOID.BOOL: return java.sql.Types.BOOLEAN;
             case TypeOID.TINYINT: return java.sql.Types.TINYINT;
-            case TypeOID.INT2: return java.sql.Types.SMALLINT;
-            case TypeOID.INT4: return java.sql.Types.INTEGER;
-            case TypeOID.INT8: return java.sql.Types.BIGINT;
+            case TypeOID.INT2:
+            case TypeOID.UINT8: return java.sql.Types.SMALLINT;
+            case TypeOID.INT4:
+            case TypeOID.UINT16: return java.sql.Types.INTEGER;
+            case TypeOID.INT8:
+            case TypeOID.UINT32:
+            case TypeOID.UINT64: return java.sql.Types.BIGINT;
             case TypeOID.FLOAT4: return java.sql.Types.REAL;
             case TypeOID.FLOAT8: return java.sql.Types.DOUBLE;
             case TypeOID.NUMERIC: return java.sql.Types.NUMERIC;
@@ -101,7 +105,10 @@ public class SixSevenResultSetMetaData implements ResultSetMetaData {
             case TypeOID.DATE: return java.sql.Types.DATE;
             case TypeOID.TIME: return java.sql.Types.TIME;
             case TypeOID.TIMESTAMP: return java.sql.Types.TIMESTAMP;
-            case TypeOID.UUID: return java.sql.Types.OTHER;
+            case TypeOID.UUID:
+            case TypeOID.INTERVAL:
+            case TypeOID.JSON:
+            case TypeOID.EMBEDDING: return java.sql.Types.OTHER;
             default: return java.sql.Types.VARCHAR;
         }
     }
@@ -113,6 +120,10 @@ public class SixSevenResultSetMetaData implements ResultSetMetaData {
             case TypeOID.INT2: return "INT2";
             case TypeOID.INT4: return "INT4";
             case TypeOID.INT8: return "INT8";
+            case TypeOID.UINT8: return "UINT8";
+            case TypeOID.UINT16: return "UINT16";
+            case TypeOID.UINT32: return "UINT32";
+            case TypeOID.UINT64: return "UINT64";
             case TypeOID.FLOAT4: return "FLOAT4";
             case TypeOID.FLOAT8: return "FLOAT8";
             case TypeOID.NUMERIC: return "NUMERIC";

@@ -36,6 +36,7 @@ const SIXSEVEN_KEYWORDS = [
   "DEPTH",
   "BREADTH",
   "HOPS",
+  "WEIGHT",
 ];
 
 // Standard SQL keywords (subset for autocomplete)
@@ -121,7 +122,7 @@ const sixsevenDialect = SQLDialect.define({
   types:
     "int8 int16 int32 int64 uint8 uint16 uint32 uint64 float32 float64 decimal bool string blob date time timestamp interval point json uuid embedding text integer bigint smallint real double varchar char boolean",
   builtin:
-    "current_timestamp current_date current_time coalesce nullif cast",
+    "current_timestamp current_date current_time coalesce nullif cast path_cost",
   operatorChars: "+-*/<>=~!@#%^&|?",
   specialVar: "",
   identifierQuotes: '"',

@@ -36,6 +36,17 @@ impl QueryResult {
         parse_row_count(&self.command_tag)
     }
 
+    /// Deserialize all rows into a struct that implements `FromRow`.
+    ///
+    /// Use `#[derive(FromRow)]` on your struct to auto-generate the implementation.
+    pub fn typed_rows_as<T: crate::FromRow>(&self) -> Vec<crate::Result<T>> {
+        let typed = self.typed_rows();
+        typed
+            .iter()
+            .map(|row| T::from_row(&self.fields, row))
+            .collect()
+    }
+
     /// Parse all rows into typed Values.
     pub fn typed_rows(&self) -> Vec<Vec<Value>> {
         self.rows
@@ -84,8 +95,7 @@ impl Connection {
     /// Send startup message and handle handshake.
     async fn startup(&mut self, cfg: &Config) -> Result<()> {
         let msg = build_startup_message(&cfg.user, &cfg.database);
-        self.stream.try_write(&msg).map_err(Error::Io)?;
-        // Flush after writing startup message
+        tokio::io::AsyncWriteExt::write_all(&mut self.stream, &msg).await?;
         tokio::io::AsyncWriteExt::flush(&mut self.stream).await?;
         self.handle_startup(cfg).await
     }

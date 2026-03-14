@@ -174,6 +174,79 @@ pub fn build_shortest_path(
     Ok(Query { text: sql, values: vec![from_id, to_id] })
 }
 
+/// Selector for shortest match queries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShortestMatchSelector {
+    AnyShortest,
+    AllShortest,
+    ShortestK(u32),
+}
+
+/// Options for a shortest match query.
+#[derive(Debug, Clone, Default)]
+pub struct ShortestMatchOptions {
+    pub where_clause: Option<String>,
+    pub weight: Option<String>,
+}
+
+impl ShortestMatchOptions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn where_clause(mut self, expr: &str) -> Self {
+        self.where_clause = Some(expr.to_string());
+        self
+    }
+
+    pub fn weight(mut self, expr: &str) -> Self {
+        self.weight = Some(expr.to_string());
+        self
+    }
+}
+
+/// Build a SELECT ... FROM MATCH shortest-path query.
+///
+/// SQL: `SELECT <return> FROM MATCH <selector> <pattern> [WEIGHT expr] [WHERE expr]`
+pub fn build_shortest_match(
+    pattern: &[&dyn PatternElement],
+    return_items: &[&str],
+    selector: ShortestMatchSelector,
+    opts: ShortestMatchOptions,
+) -> Result<Query> {
+    if pattern.is_empty() {
+        return Err(Error::Builder("MATCH pattern must not be empty".into()));
+    }
+    if return_items.is_empty() {
+        return Err(Error::Builder("must have at least one RETURN item".into()));
+    }
+
+    let pattern_sql: String = pattern.iter().map(|e| e.pattern_sql()).collect();
+    let return_sql = return_items.join(", ");
+
+    let selector_sql = match selector {
+        ShortestMatchSelector::AnyShortest => "ANY SHORTEST".to_string(),
+        ShortestMatchSelector::AllShortest => "ALL SHORTEST".to_string(),
+        ShortestMatchSelector::ShortestK(k) => {
+            if k == 0 {
+                return Err(Error::Builder("k must be positive".into()));
+            }
+            format!("SHORTEST {k}")
+        }
+    };
+
+    let mut sql = format!("SELECT {return_sql} FROM MATCH {selector_sql} {pattern_sql}");
+
+    if let Some(ref w) = opts.weight {
+        sql.push_str(&format!(" WEIGHT {w}"));
+    }
+    if let Some(ref w) = opts.where_clause {
+        sql.push_str(&format!(" WHERE {w}"));
+    }
+
+    Ok(Query { text: sql, values: vec![] })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
