@@ -603,7 +603,7 @@ describe("QA — buildAlgorithmSQL adversarial", () => {
     expect(sql).toContain("VARIANT TOTAL");
   });
 
-  it("builds Weighted Shortest Path with empty table names", () => {
+  it("builds Weighted Shortest Path with empty table names (defaults to 't')", () => {
     const algo = getAlgorithm("weighted_shortest_path")!;
     const sql = buildAlgorithmSQL(algo, "testdb", {
       source_table: "",
@@ -612,22 +612,22 @@ describe("QA — buildAlgorithmSQL adversarial", () => {
       target_id: 1,
       weight_property: "weight",
     });
-    // Empty tables generate empty quotes — may cause server error
-    expect(sql).toContain('""');
+    // Empty tables now default to "t" via quoteIdent fallback (GDB-556 fix)
+    expect(sql).toContain('"t"');
   });
 
-  it("Weighted Shortest Path — special characters in weight_property", () => {
+  it("Weighted Shortest Path — special characters in weight_property throws", () => {
     const algo = getAlgorithm("weighted_shortest_path")!;
-    const sql = buildAlgorithmSQL(algo, "testdb", {
-      source_table: "users",
-      source_id: 1,
-      target_table: "posts",
-      target_id: 2,
-      weight_property: "cost; DROP TABLE users",
-    });
-    // The weight property is inserted directly without quoting
-    // This is a potential SQL injection vector
-    expect(sql).toContain("WEIGHT cost; DROP TABLE users");
+    // GDB-556 fix: weight_property is now validated via quoteIdent
+    expect(() =>
+      buildAlgorithmSQL(algo, "testdb", {
+        source_table: "users",
+        source_id: 1,
+        target_table: "posts",
+        target_id: 2,
+        weight_property: "cost; DROP TABLE users",
+      })
+    ).toThrow(/Invalid identifier/);
   });
 
   it("handles negative iteration count", () => {
@@ -670,17 +670,18 @@ describe("QA — buildAlgorithmSQL adversarial", () => {
     expect(sql).toContain("ITERATIONS NaN");
   });
 
-  it("Weighted Shortest Path — special chars in table name", () => {
+  it("Weighted Shortest Path — special chars in table name throws", () => {
     const algo = getAlgorithm("weighted_shortest_path")!;
-    const sql = buildAlgorithmSQL(algo, "testdb", {
-      source_table: 'users"; DROP TABLE users; --',
-      source_id: 1,
-      target_table: "posts",
-      target_id: 2,
-      weight_property: "weight",
-    });
-    // Table names are double-quoted, so the injection attempt is contained
-    expect(sql).toContain('"users"; DROP TABLE users; --"');
+    // GDB-556 fix: table names are now validated via quoteIdent
+    expect(() =>
+      buildAlgorithmSQL(algo, "testdb", {
+        source_table: 'users"; DROP TABLE users; --',
+        source_id: 1,
+        target_table: "posts",
+        target_id: 2,
+        weight_property: "weight",
+      })
+    ).toThrow(/Invalid identifier/);
   });
 });
 

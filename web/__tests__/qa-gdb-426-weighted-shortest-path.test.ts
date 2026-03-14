@@ -196,7 +196,7 @@ describe("QA-GDB-426 — AC5: Adversarial SQL generation edge cases", () => {
     expect(idMatches).toHaveLength(2);
   });
 
-  it("handles empty source_table and target_table", () => {
+  it("handles empty source_table and target_table with default fallback", () => {
     const algo = getWSP();
     const sql = buildAlgorithmSQL(algo, "testdb", {
       source_table: "",
@@ -205,10 +205,9 @@ describe("QA-GDB-426 — AC5: Adversarial SQL generation edge cases", () => {
       target_id: 2,
       weight_property: "cost",
     });
-    // Empty table names produce SQL with empty quoted identifiers
-    // This is valid SQL generation — server will reject it
-    expect(sql).toContain('FROM ""');
-    expect(sql).toContain('TO ""');
+    // Empty table names now default to "t" via the || "t" fallback
+    expect(sql).toContain('FROM "t"');
+    expect(sql).toContain('TO "t"');
   });
 
   it("handles numeric string IDs", () => {
@@ -264,48 +263,78 @@ describe("QA-GDB-426 — AC5: Adversarial SQL generation edge cases", () => {
 });
 
 // ---------------------------------------------------------------------------
-// BUG DETECTION: SQL injection via weight_property
+// FIX VERIFICATION: GDB-556 — SQL injection via weight_property now blocked
 // ---------------------------------------------------------------------------
-describe("QA-GDB-426 — BUG: weight_property is not sanitized (SQL injection)", () => {
-  it("weight_property with spaces is interpolated unsafely", () => {
+describe("QA-GDB-556 — FIXED: weight_property is now sanitized", () => {
+  it("weight_property with injection attempt throws error", () => {
     const algo = getWSP();
-    const sql = buildAlgorithmSQL(algo, "testdb", {
-      source_table: "t",
-      source_id: 1,
-      target_table: "t",
-      target_id: 2,
-      weight_property: "distance; DROP TABLE users--",
-    });
-    // BUG: The weight_property is interpolated directly without escaping
-    // This means malicious input becomes part of the SQL
-    expect(sql).toContain("WEIGHT distance; DROP TABLE users--");
+    expect(() =>
+      buildAlgorithmSQL(algo, "testdb", {
+        source_table: "t",
+        source_id: 1,
+        target_table: "t",
+        target_id: 2,
+        weight_property: "distance; DROP TABLE users--",
+      })
+    ).toThrow();
   });
 
-  it("weight_property with SQL keywords is not escaped", () => {
+  it("weight_property with SQL keywords throws error", () => {
+    const algo = getWSP();
+    expect(() =>
+      buildAlgorithmSQL(algo, "testdb", {
+        source_table: "t",
+        source_id: 1,
+        target_table: "t",
+        target_id: 2,
+        weight_property: "x WHERE 1=1",
+      })
+    ).toThrow();
+  });
+
+  it("valid weight_property identifiers are accepted", () => {
     const algo = getWSP();
     const sql = buildAlgorithmSQL(algo, "testdb", {
       source_table: "t",
       source_id: 1,
       target_table: "t",
       target_id: 2,
-      weight_property: "x WHERE 1=1",
+      weight_property: "distance",
     });
-    // BUG: arbitrary WHERE clause can be injected via weight_property
-    expect(sql).toContain("WEIGHT x WHERE 1=1");
+    expect(sql).toContain("WEIGHT distance");
+  });
+
+  it("dotted weight_property (alias.prop) is accepted", () => {
+    const algo = getWSP();
+    const sql = buildAlgorithmSQL(algo, "testdb", {
+      source_table: "t",
+      source_id: 1,
+      target_table: "t",
+      target_id: 2,
+      weight_property: "r.distance",
+    });
+    expect(sql).toContain("WEIGHT r.distance");
+  });
+
+  it("table names with invalid characters now throw", () => {
+    const algo = getWSP();
+    expect(() =>
+      buildAlgorithmSQL(algo, "testdb", {
+        source_table: 'table"name',
+        source_id: 1,
+        target_table: "other",
+        target_id: 2,
+        weight_property: "w",
+      })
+    ).toThrow(/Invalid identifier/);
   });
 });
 
 // ---------------------------------------------------------------------------
-// BUG DETECTION: Missing WEIGHT keyword in SQL dialect
+// FIX VERIFICATION: GDB-557 — WEIGHT keyword and path_cost now in SQL dialect
 // ---------------------------------------------------------------------------
-describe("QA-GDB-426 — BUG: WEIGHT keyword missing from SQL dialect", () => {
-  // The WEIGHT keyword is used in weighted shortest path queries but is
-  // not included in SIXSEVEN_KEYWORDS in sixseven-sql-lang.ts.
-  // This means the SQL editor won't syntax-highlight it.
-
-  it("SIXSEVEN_KEYWORDS should include WEIGHT for syntax highlighting", async () => {
-    // We can't directly import the keywords array (it's not exported),
-    // but we can verify the file content
+describe("QA-GDB-557 — FIXED: WEIGHT keyword in SQL dialect", () => {
+  it("SIXSEVEN_KEYWORDS includes WEIGHT", async () => {
     const fs = await import("fs");
     const content = fs.readFileSync(
       "lib/sixseven-sql-lang.ts",
@@ -315,36 +344,24 @@ describe("QA-GDB-426 — BUG: WEIGHT keyword missing from SQL dialect", () => {
       /SIXSEVEN_KEYWORDS\s*=\s*\[([\s\S]*?)\]/
     );
     expect(keywordsSection).not.toBeNull();
-    // BUG: WEIGHT is missing from SIXSEVEN_KEYWORDS
-    expect(keywordsSection![1]).not.toContain('"WEIGHT"');
+    expect(keywordsSection![1]).toContain('"WEIGHT"');
   });
-});
 
-// ---------------------------------------------------------------------------
-// BUG DETECTION: path_cost missing from SQL builtins
-// ---------------------------------------------------------------------------
-describe("QA-GDB-426 — BUG: path_cost function missing from SQL dialect builtins", () => {
-  it("SQL dialect builtins should include path_cost for autocomplete", async () => {
+  it("SQL dialect builtins include path_cost", async () => {
     const fs = await import("fs");
     const content = fs.readFileSync(
       "lib/sixseven-sql-lang.ts",
       "utf-8"
     );
-    // BUG: path_cost is a key function for weighted shortest path
-    // but is not listed in the builtin functions
-    expect(content).not.toContain("path_cost");
+    expect(content).toContain("path_cost");
   });
 });
 
 // ---------------------------------------------------------------------------
-// BUG DETECTION: Inconsistent identifier quoting
+// FIX VERIFICATION: Identifier quoting now uses quoteIdent
 // ---------------------------------------------------------------------------
-describe("QA-GDB-426 — BUG: Inconsistent identifier quoting in buildWeightedShortestPathSQL", () => {
-  it("uses double-quote wrapping instead of quoteIdent validation", () => {
-    // quoteIdent in schema-utils.ts validates identifiers without quoting.
-    // buildWeightedShortestPathSQL wraps table names in double quotes.
-    // If SixSevenDB doesn't support double-quoted identifiers (per the
-    // quoteIdent comment), this SQL would fail.
+describe("QA-GDB-426 — FIXED: Identifier quoting uses quoteIdent", () => {
+  it("table names are validated via quoteIdent", () => {
     const algo = getWSP();
     const sql = buildAlgorithmSQL(algo, "testdb", {
       source_table: "my_table",
@@ -353,34 +370,30 @@ describe("QA-GDB-426 — BUG: Inconsistent identifier quoting in buildWeightedSh
       target_id: 2,
       weight_property: "cost",
     });
-    // The SQL uses double-quoted identifiers
+    // quoteIdent validates then the name is wrapped in double quotes in the SQL template
     expect(sql).toContain('"my_table"');
     expect(sql).toContain('"other_table"');
-    // But handleShortestPath in graph/route.ts uses quoteIdent (no quotes)
-    // This inconsistency means one approach or the other will fail
   });
 
-  it("table names with double quotes in them are not escaped", () => {
+  it("table names with invalid characters are rejected", () => {
     const algo = getWSP();
-    const sql = buildAlgorithmSQL(algo, "testdb", {
-      source_table: 'table"name',
-      source_id: 1,
-      target_table: "other",
-      target_id: 2,
-      weight_property: "w",
-    });
-    // BUG: Double quotes within the table name are not escaped
-    // This produces broken SQL: FROM "table"name"
-    expect(sql).toContain('"table"name"');
+    expect(() =>
+      buildAlgorithmSQL(algo, "testdb", {
+        source_table: 'table"name',
+        source_id: 1,
+        target_table: "other",
+        target_id: 2,
+        weight_property: "w",
+      })
+    ).toThrow(/Invalid identifier/);
   });
 });
 
 // ---------------------------------------------------------------------------
-// BUG DETECTION: Java, Go, Rust clients missing buildShortestMatch
+// FIX VERIFICATION: GDB-558 — All client SDKs now have WEIGHT support
 // ---------------------------------------------------------------------------
-describe("QA-GDB-426 — BUG: Client SDKs missing WEIGHT support", () => {
+describe("QA-GDB-558 — FIXED: All client SDKs have WEIGHT support", () => {
   it("Node.js SDK has buildShortestMatch with weight option", async () => {
-    // Verify Node.js SDK supports WEIGHT - this should PASS
     const fs = await import("fs");
     const content = fs.readFileSync(
       "../clients/nodejs/src/query-builders.ts",
@@ -391,7 +404,6 @@ describe("QA-GDB-426 — BUG: Client SDKs missing WEIGHT support", () => {
   });
 
   it("Python SDK has build_shortest_match with weight parameter", async () => {
-    // Verify Python SDK supports WEIGHT - this should PASS
     const fs = await import("fs");
     const content = fs.readFileSync(
       "../clients/python/src/giodb/query_builders.py",
@@ -402,7 +414,6 @@ describe("QA-GDB-426 — BUG: Client SDKs missing WEIGHT support", () => {
   });
 
   it(".NET SDK has BuildShortestMatch with Weight option", async () => {
-    // Verify .NET SDK supports WEIGHT - this should PASS
     const fs = await import("fs");
     const content = fs.readFileSync(
       "../clients/dotnet/src/SixSevenDB.Client/QueryBuilders.cs",
@@ -412,63 +423,36 @@ describe("QA-GDB-426 — BUG: Client SDKs missing WEIGHT support", () => {
     expect(content).toContain("WEIGHT");
   });
 
-  it("Java SDK is missing buildShortestMatch with WEIGHT support", async () => {
-    // BUG: Java client has ShortestPathBuilder but no ShortestMatchBuilder
-    // and no WEIGHT clause support at all
-    const fs = await import("fs");
-    const javaDir = "../clients/java/src/main/java/com/sixsevendb";
-
-    // Check if any Java file contains WEIGHT support
-    const { readdirSync, readFileSync } = fs;
-    const files = readdirSync(javaDir);
-    let hasWeightSupport = false;
-    for (const file of files) {
-      if (file.endsWith(".java")) {
-        const content = readFileSync(`${javaDir}/${file}`, "utf-8");
-        if (content.includes("WEIGHT") || content.includes("weight()")) {
-          hasWeightSupport = true;
-          break;
-        }
-      }
-    }
-    // BUG: Java client has no WEIGHT support
-    expect(hasWeightSupport).toBe(false);
-  });
-
-  it("Go SDK is missing buildShortestMatch with WEIGHT support", async () => {
-    // BUG: Go client has no shortest match builder or WEIGHT support
-    const fs = await import("fs");
-    const goDir = "../clients/go";
-    const { readdirSync, readFileSync } = fs;
-    const files = readdirSync(goDir);
-    let hasWeightSupport = false;
-    for (const file of files) {
-      if (file.endsWith(".go")) {
-        const content = readFileSync(`${goDir}/${file}`, "utf-8");
-        if (
-          content.includes("ShortestMatch") ||
-          content.includes("WEIGHT") ||
-          content.includes("Weight")
-        ) {
-          hasWeightSupport = true;
-          break;
-        }
-      }
-    }
-    // BUG: Go client has no WEIGHT support
-    expect(hasWeightSupport).toBe(false);
-  });
-
-  it("Rust SDK is missing build_shortest_match with WEIGHT support", async () => {
-    // BUG: Rust client has no shortest match builder or WEIGHT support
+  it("Java SDK now has ShortestMatchBuilder with WEIGHT support", async () => {
     const fs = await import("fs");
     const content = fs.readFileSync(
-      "../clients/rust/src/query_builders.rs",
+      "../clients/java/src/main/java/com/sixsevendb/ShortestMatchBuilder.java",
       "utf-8"
     );
-    // BUG: No shortest_match or WEIGHT support in Rust client
-    expect(content).not.toContain("shortest_match");
-    expect(content).not.toContain("WEIGHT");
+    expect(content).toContain("WEIGHT");
+    expect(content).toContain("weight");
+    expect(content).toContain("ShortestMatchBuilder");
+  });
+
+  it("Go SDK now has BuildShortestMatch with WEIGHT support", async () => {
+    const fs = await import("fs");
+    const content = fs.readFileSync(
+      "../clients/go/match_builders.go",
+      "utf-8"
+    );
+    expect(content).toContain("BuildShortestMatch");
+    expect(content).toContain("WEIGHT");
+    expect(content).toContain("WithShortestMatchWeight");
+  });
+
+  it("Rust SDK now has build_shortest_match with WEIGHT support", async () => {
+    const fs = await import("fs");
+    const content = fs.readFileSync(
+      "../clients/rust/src/match_builders.rs",
+      "utf-8"
+    );
+    expect(content).toContain("build_shortest_match");
+    expect(content).toContain("WEIGHT");
   });
 });
 
