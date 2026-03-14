@@ -11,6 +11,7 @@ import type {
 } from "./algorithm-types";
 import { getAlgorithm } from "./algorithm-types";
 import type { ConnectionParams } from "./connection-types";
+import { quoteIdent } from "./schema-utils";
 
 const API_BASE = "/api";
 
@@ -206,11 +207,17 @@ export function buildAlgorithmSQL(
 function buildWeightedShortestPathSQL(
   params: Record<string, string | number>
 ): string {
-  const srcTable = String(params.source_table || "");
-  const srcId = params.source_id ?? 1;
-  const tgtTable = String(params.target_table || "");
-  const tgtId = params.target_id ?? 1;
+  const srcTable = quoteIdent(String(params.source_table || "t"));
+  const srcId = Number(params.source_id ?? 1);
+  const tgtTable = quoteIdent(String(params.target_table || "t"));
+  const tgtId = Number(params.target_id ?? 1);
   const weightProp = String(params.weight_property || "weight");
+
+  // Validate weight_property: allow "identifier" or "alias.identifier" patterns only
+  const weightParts = weightProp.split(".");
+  for (const part of weightParts) {
+    quoteIdent(part);
+  }
 
   return `SHORTEST PATH FROM "${srcTable}" WHERE id = ${srcId} TO "${tgtTable}" WHERE id = ${tgtId} WEIGHT ${weightProp}`;
 }

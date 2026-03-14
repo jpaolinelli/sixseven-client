@@ -67,7 +67,8 @@ pub use connection::{Connection, QueryResult};
 pub use error::{Error, Result};
 pub use match_builders::{
     Direction, MatchEdge, MatchNode, MatchOptions, PathOptions,
-    build_match, build_shortest_path,
+    ShortestMatchOptions, ShortestMatchSelector,
+    build_match, build_shortest_match, build_shortest_path,
 };
 pub use query_builders::{
     Query, build_link, build_nearest, build_traverse, build_unlink,

@@ -125,3 +125,83 @@ func BuildShortestPath(edgeType, fromTable string, fromID interface{}, toTable s
 
 	return &Query{Text: strings.Join(parts, " "), Values: values}, nil
 }
+
+// ShortestMatchOption is a functional option for BuildShortestMatch.
+type ShortestMatchOption func(*shortestMatchOptions)
+
+type shortestMatchOptions struct {
+	where  string
+	weight string
+	k      int
+}
+
+// WithShortestMatchWhere adds a WHERE clause.
+func WithShortestMatchWhere(expr string) ShortestMatchOption {
+	return func(o *shortestMatchOptions) { o.where = expr }
+}
+
+// WithShortestMatchWeight adds a WEIGHT clause.
+func WithShortestMatchWeight(expr string) ShortestMatchOption {
+	return func(o *shortestMatchOptions) { o.weight = expr }
+}
+
+// WithShortestMatchK sets k for "SHORTEST k" selector.
+func WithShortestMatchK(k int) ShortestMatchOption {
+	return func(o *shortestMatchOptions) { o.k = k }
+}
+
+// BuildShortestMatch builds a SELECT ... FROM MATCH <selector> <pattern> query.
+// Selector must be "ANY SHORTEST", "ALL SHORTEST", or "SHORTEST" (requires k option).
+// Syntax: SELECT <return> FROM MATCH <selector> <pattern> [WEIGHT expr] [WHERE expr]
+func BuildShortestMatch(
+	pattern []PatternElement,
+	returnItems []string,
+	selector string,
+	opts ...ShortestMatchOption,
+) (*Query, error) {
+	if len(pattern) == 0 {
+		return nil, fmt.Errorf("MATCH pattern must not be empty")
+	}
+	if len(returnItems) == 0 {
+		return nil, fmt.Errorf("must have at least one return item")
+	}
+
+	options := &shortestMatchOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+
+	var parts []string
+	for _, elem := range pattern {
+		parts = append(parts, elem.patternSQL())
+	}
+	patternStr := strings.Join(parts, "")
+	returnStr := strings.Join(returnItems, ", ")
+
+	normalized := strings.ToUpper(selector)
+	var selectorSQL string
+	switch normalized {
+	case "ANY SHORTEST":
+		selectorSQL = "ANY SHORTEST"
+	case "ALL SHORTEST":
+		selectorSQL = "ALL SHORTEST"
+	case "SHORTEST":
+		if options.k <= 0 {
+			return nil, fmt.Errorf("k is required when selector is SHORTEST")
+		}
+		selectorSQL = fmt.Sprintf("SHORTEST %d", options.k)
+	default:
+		return nil, fmt.Errorf("unknown selector: %s", selector)
+	}
+
+	sql := fmt.Sprintf("SELECT %s FROM MATCH %s %s", returnStr, selectorSQL, patternStr)
+
+	if options.weight != "" {
+		sql += fmt.Sprintf(" WEIGHT %s", options.weight)
+	}
+	if options.where != "" {
+		sql += fmt.Sprintf(" WHERE %s", options.where)
+	}
+
+	return &Query{Text: sql, Values: nil}, nil
+}
