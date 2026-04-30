@@ -324,10 +324,15 @@ _VALID_CLOSENESS_VARIANTS = {"STANDARD", "WASSERMAN_FAUST", "HARMONIC"}
 
 
 def _validate_non_empty_str(value: Any, name: str) -> None:
-    """Validate that a value is a non-empty string."""
+    """Validate that a value is a non-empty, non-whitespace string.
+
+    See GDB-664: previously only rejected the empty string, which let
+    whitespace-only values such as ``" "``, ``"\\t"``, ``"\\n"``, and
+    ``"\\r\\n"`` slip through and be emitted as parameter values.
+    """
     if not isinstance(value, str):
         raise ValueError(f"{name} must be a string, got {type(value).__name__}")
-    if not value:
+    if not value or not value.strip():
         raise ValueError(f"{name} must be a non-empty string")
 
 
@@ -403,7 +408,7 @@ def _validate_select(select: Union[str, Sequence[str], None]) -> str:
                 "select column identifiers must be strings, "
                 f"got {type(col).__name__}"
             )
-        if not _IDENTIFIER_RE.match(col):
+        if not _IDENTIFIER_RE.fullmatch(col):
             raise ValueError(
                 f"select column identifier {col!r} is not a valid identifier "
                 "(must match ^[A-Za-z_][A-Za-z0-9_]*$)"

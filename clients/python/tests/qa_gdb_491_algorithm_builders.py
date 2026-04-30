@@ -294,10 +294,6 @@ class TestEdgeTypeAdversarial:
         "value", ["   ", "\t", "\n", " \t\n "],
     )
     @pytest.mark.parametrize("builder", ALL_BUILDERS)
-    @pytest.mark.xfail(
-        reason="Bug: edge_type accepts whitespace-only strings (only checks `if not value`)",
-        strict=True,
-    )
     def test_edge_type_whitespace_only_rejected(self, builder, value):
         with pytest.raises(ValueError, match="edge_type"):
             builder(value)

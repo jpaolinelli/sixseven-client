@@ -430,19 +430,15 @@ class TestParameterIsolation:
 class TestNewValidatorBypass:
     """Bug found by adversarial testing of the new _validate_select."""
 
-    def test_trailing_newline_passes_regex_BUG(self):
-        """BUG: Python's ``^...$`` regex anchor allows a trailing ``\\n``,
-        so identifiers like ``"col\\n"`` pass the allowlist and are emitted
-        in SQL as ``"col<newline>"``. The newline stays inside the
-        double-quoted identifier so it does not escape the string context,
-        but the validator is not enforcing what its docstring claims
-        (``^[A-Za-z_][A-Za-z0-9_]*$``). Use ``re.fullmatch`` or anchor
-        with ``\\A...\\Z`` to fix.
+    def test_trailing_newline_rejected(self):
+        """GDB-669 fix: ``re.match`` with ``^...$`` allowed a trailing
+        ``\\n`` to slip past the allowlist. The validator now uses
+        ``re.fullmatch`` so any identifier with a trailing newline
+        (``\\n``, ``\\r``, ``\\r\\n``) is rejected.
         """
-        # Currently passes; this test pins the bug and will start failing
-        # once the bug is fixed. Tracked as the new bug filed during QA.
-        sql = _validate_select(["col\n"])
-        assert sql == '"col\n"'  # documents current (buggy) behaviour
+        for bad in ("col\n", "col\r", "col\r\n", "col\n\n"):
+            with pytest.raises(ValueError):
+                _validate_select([bad])
 
 
 class TestOutOfScopeRegressions:
@@ -459,8 +455,11 @@ class TestOutOfScopeRegressions:
         with pytest.raises(ValueError):
             build_pagerank("knows", damping=float("-inf"))
 
-    def test_gdb_664_whitespace_edge_type_still_accepted(self):
-        """GDB-664 remains unfixed: whitespace-only edge_type passes the
-        non-empty-string check. Out of scope for GDB-662."""
-        result = build_pagerank("   ")
-        assert result["values"][0] == "   "
+    def test_gdb_664_whitespace_edge_type_rejected(self):
+        """GDB-664 fix: whitespace-only ``edge_type`` strings are now
+        rejected by ``_validate_non_empty_str`` (it strips before the
+        emptiness check). Pin the fix so any future regression is caught.
+        """
+        for bad in ("   ", "\t", "\n", "\r\n", "\t \r\n "):
+            with pytest.raises(ValueError, match="edge_type"):
+                build_pagerank(bad)
