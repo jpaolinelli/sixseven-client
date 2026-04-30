@@ -199,7 +199,7 @@ async function handleVariableLengthTraverse(
   const edge = edgeType ? `:${quoteIdent(edgeType)}` : "";
   const quant = `*${min}..${max}`;
   const left = direction === "in" ? "<-" : "-";
-  const right = direction === "out" || direction === "both" ? "->" : "-";
+  const right = direction === "out" ? "->" : "-";
 
   const sql =
     `SELECT * FROM MATCH ((s:${quoteIdent(table)})` +

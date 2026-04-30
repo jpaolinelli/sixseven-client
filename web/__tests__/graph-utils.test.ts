@@ -3,6 +3,7 @@ import {
   makeNodeId,
   tableColor,
   parseNodeId,
+  buildVariableLengthMatchSql,
 } from "@/lib/graph-utils";
 
 describe("makeNodeId", () => {
@@ -45,6 +46,60 @@ describe("parseNodeId", () => {
     const parsed = parseNodeId(id);
     expect(parsed.table).toBe("products");
     expect(parsed.pk).toBe("99");
+  });
+});
+
+describe("buildVariableLengthMatchSql", () => {
+  const cfg = { minDepth: 1, maxDepth: 3 };
+
+  it("should emit outgoing arrow for direction='out'", () => {
+    const sql = buildVariableLengthMatchSql("users", "1", "out", cfg);
+    expect(sql).toContain("-[r*1..3]->(t)");
+    expect(sql).not.toContain("<-");
+  });
+
+  it("should emit incoming arrow for direction='in'", () => {
+    const sql = buildVariableLengthMatchSql("users", "1", "in", cfg);
+    expect(sql).toContain("<-[r*1..3]-(t)");
+    expect(sql).not.toContain("->");
+  });
+
+  it("should emit undirected pattern for direction='both'", () => {
+    const sql = buildVariableLengthMatchSql("users", "1", "both", cfg);
+    expect(sql).toContain("-[r*1..3]-(t)");
+    expect(sql).not.toContain("->");
+    expect(sql).not.toContain("<-");
+  });
+
+  it("should include edge type when provided", () => {
+    const sql = buildVariableLengthMatchSql("users", "1", "out", cfg, "follows");
+    expect(sql).toContain(":follows");
+  });
+
+  it("should quote string id values", () => {
+    const sql = buildVariableLengthMatchSql("users", "alice", "out", cfg);
+    expect(sql).toContain("'alice'");
+  });
+
+  it("should pass numeric id values unquoted", () => {
+    const sql = buildVariableLengthMatchSql("users", "42", "out", cfg);
+    expect(sql).toContain("s.id = 42");
+  });
+
+  it("should produce consistent arrows across all three directions", () => {
+    const outSql = buildVariableLengthMatchSql("t", "1", "out", { minDepth: 2, maxDepth: 4 });
+    const inSql = buildVariableLengthMatchSql("t", "1", "in", { minDepth: 2, maxDepth: 4 });
+    const bothSql = buildVariableLengthMatchSql("t", "1", "both", { minDepth: 2, maxDepth: 4 });
+
+    // out: -[...]->
+    expect(outSql).toMatch(/-\[r\*2\.\.4\]->/);
+    // in: <-[...]-
+    expect(inSql).toMatch(/<-\[r\*2\.\.4\]-/);
+    expect(inSql).not.toMatch(/-\[r\*2\.\.4\]->/);
+    // both: -[...]-  (no arrows)
+    expect(bothSql).toMatch(/-\[r\*2\.\.4\]-\(/);
+    expect(bothSql).not.toMatch(/<-/);
+    expect(bothSql).not.toMatch(/->/);
   });
 });
 

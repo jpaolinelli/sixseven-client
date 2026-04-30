@@ -141,13 +141,13 @@ describe("QA_buildVariableLengthMatchSql_depth", () => {
     expect(sql).toContain("*1..5");
   });
 
-  // Reviewer-flagged latent issue #1: direction === "both" only emits outgoing arrow.
-  it("KNOWN BUG (reviewer flagged): direction='both' emits only outgoing arrow, not bidirectional", () => {
+  // GDB-668: Fixed — direction='both' now emits undirected pattern (no arrows).
+  it("direction='both' emits undirected pattern (no arrows)", () => {
     const sql = buildVariableLengthMatchSql("u", "1", "both", { minDepth: 1, maxDepth: 2 });
-    // Current (buggy) behavior: same as direction='out' → '-[r]->'
-    expect(sql).toMatch(/-\[r\*1\.\.2\]->/);
-    // What it SHOULD be (commented as documentation): '-[r]-' (no arrows) or '<-[r]->'
-    // expect(sql).toMatch(/-\[r\*1\.\.2\]-(?!>)/); // would fail today
+    // Fixed behavior: '-[r*1..2]-' (undirected, no arrow on either side)
+    expect(sql).toMatch(/-\[r\*1\.\.2\]-\(/);
+    expect(sql).not.toMatch(/-\[r\*1\.\.2\]->/);
+    expect(sql).not.toMatch(/<-\[r\*1\.\.2\]-/);
   });
 
   it("direction='in' emits incoming arrow", () => {
@@ -597,7 +597,7 @@ describe("QA_API_route_validation", () => {
     expect(body.error).toMatch(/Invalid identifier/);
   });
 
-  it("KNOWN BUG (reviewer flagged): variable_length_traverse direction='both' produces -[r]-> (outgoing only)", async () => {
+  it("GDB-668 FIX: variable_length_traverse direction='both' produces undirected pattern (no arrows)", async () => {
     let captured = "";
     vi.doMock("@/lib/db", () => ({
       query: vi.fn().mockImplementation(async (sql: string) => {
@@ -617,9 +617,10 @@ describe("QA_API_route_validation", () => {
         maxDepth: 2,
       })
     );
-    // Current buggy behavior: same as 'out'
-    expect(captured).toMatch(/-\[r\*1\.\.2\]->/);
-    // SHOULD be: '-[r*1..2]-' (no arrows, undirected) — BUG
+    // Fixed: undirected pattern with no arrows
+    expect(captured).toMatch(/-\[r\*1\.\.2\]-/);
+    expect(captured).not.toMatch(/-\[r\*1\.\.2\]->/);
+    expect(captured).not.toMatch(/<-\[r\*1\.\.2\]-/);
   });
 
   it("shortest_path rejects invalid selector", async () => {
