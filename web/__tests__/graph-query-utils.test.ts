@@ -4,6 +4,10 @@ import {
   isEdgeCentricResult,
   isGraphResult,
   isTraverseQuery,
+  isMatchQuery,
+  isGraphQuery,
+  parsePathSelector,
+  parseHopQuantifier,
   buildEdgeQuery,
   parseTraverseSource,
   buildSourceNodeQuery,
@@ -576,5 +580,77 @@ describe("formatEdgeTooltip", () => {
   it("shows only edge type when no properties", () => {
     const tooltip = formatEdgeTooltip("follows", {});
     expect(tooltip).toBe("Edge: follows");
+  });
+});
+
+describe("isMatchQuery", () => {
+  it("detects SELECT ... FROM MATCH queries", () => {
+    expect(isMatchQuery("SELECT * FROM MATCH ((a)-[r]->(b))")).toBe(true);
+    expect(
+      isMatchQuery(
+        "SELECT * FROM MATCH ANY SHORTEST PATH ((s)-[r]->*(t)) WHERE s.id = 1"
+      )
+    ).toBe(true);
+  });
+
+  it("rejects non-MATCH queries", () => {
+    expect(isMatchQuery("SELECT * FROM users")).toBe(false);
+    expect(isMatchQuery("SELECT * FROM TRAVERSE OUT FROM users(1)")).toBe(false);
+  });
+
+  it("is case-insensitive", () => {
+    expect(isMatchQuery("select * from match ((a)-[r]->(b))")).toBe(true);
+  });
+});
+
+describe("isGraphQuery", () => {
+  it("returns true for TRAVERSE queries", () => {
+    expect(isGraphQuery("SELECT * FROM TRAVERSE OUT FROM users(1)")).toBe(true);
+  });
+
+  it("returns true for MATCH queries", () => {
+    expect(isGraphQuery("SELECT * FROM MATCH ((a)-[r]->(b))")).toBe(true);
+  });
+
+  it("returns false for non-graph queries", () => {
+    expect(isGraphQuery("SELECT * FROM users")).toBe(false);
+  });
+});
+
+describe("parsePathSelector", () => {
+  it("parses ANY SHORTEST PATH", () => {
+    expect(
+      parsePathSelector("SELECT * FROM MATCH ANY SHORTEST PATH ((a)-[r]->*(b))")
+    ).toEqual({ selector: "any_shortest" });
+  });
+
+  it("parses ALL SHORTEST PATH", () => {
+    expect(
+      parsePathSelector("SELECT * FROM MATCH ALL SHORTEST PATH ((a)-[r]->*(b))")
+    ).toEqual({ selector: "all_shortest" });
+  });
+
+  it("parses SHORTEST K PATH and returns k", () => {
+    expect(
+      parsePathSelector("SELECT * FROM MATCH SHORTEST 5 PATH ((a)-[r]->*(b))")
+    ).toEqual({ selector: "shortest_k", k: 5 });
+  });
+
+  it("returns null when no selector is present", () => {
+    expect(parsePathSelector("SELECT * FROM MATCH ((a)-[r]->(b))")).toBeNull();
+  });
+});
+
+describe("parseHopQuantifier", () => {
+  it("parses *min..max from a MATCH pattern", () => {
+    expect(parseHopQuantifier("[r*1..3]")).toEqual({ min: 1, max: 3 });
+  });
+
+  it("tolerates whitespace inside the quantifier", () => {
+    expect(parseHopQuantifier("[r* 2 .. 7 ]")).toEqual({ min: 2, max: 7 });
+  });
+
+  it("returns null when no quantifier is present", () => {
+    expect(parseHopQuantifier("[r:follows]")).toBeNull();
   });
 });

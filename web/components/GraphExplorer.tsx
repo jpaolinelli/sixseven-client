@@ -13,14 +13,20 @@ import type {
   LayoutType,
   ContextMenuState,
   GraphFilters,
+  PathSelector,
+  PathSet,
 } from "@/lib/graph-types";
 import {
   traverseNode,
-  findShortestPath,
+  variableLengthTraverse,
+  findShortestPathsWithSelector,
   fetchNodeDetails,
   makeNodeId,
   tableColor,
   parseNodeId,
+  parsePathSet,
+  pathSetToHighlightMaps,
+  pathColor,
 } from "@/lib/graph-utils";
 import { useConnection } from "@/lib/ConnectionContext";
 import type { EdgeTypeInfo } from "@/lib/types";
@@ -50,6 +56,26 @@ export function GraphExplorer({
   const [highlightedEdges, setHighlightedEdges] = useState<Set<string>>(
     new Set()
   );
+  // Color overrides for highlighted path nodes/edges (per-path coloring).
+  const [pathNodeColors, setPathNodeColors] = useState<Map<string, string>>(
+    new Map()
+  );
+  const [pathEdgeColors, setPathEdgeColors] = useState<Map<string, string>>(
+    new Map()
+  );
+  // Hop label per edge id (e.g. "1", "2", ...) shown on edges in the path.
+  const [pathHopLabels, setPathHopLabels] = useState<Map<string, string>>(
+    new Map()
+  );
+  // The PathSet returned from the most recent shortest-path query.
+  const [activePathSet, setActivePathSet] = useState<PathSet | null>(null);
+
+  // Path selector + variable-length controls
+  const [pathSelector, setPathSelector] = useState<PathSelector>("any_shortest");
+  const [pathK, setPathK] = useState(3);
+  const [minDepth, setMinDepth] = useState(1);
+  const [traversalMaxDepth, setTraversalMaxDepth] = useState(3);
+  const [useVariableLength, setUseVariableLength] = useState(false);
   const [layout, setLayout] = useState<LayoutType>("force");
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(
     null
@@ -180,32 +206,43 @@ export function GraphExplorer({
 
       const visNodes = visibleNodes.map((n) => {
         const algoColor = algorithmColors?.get(n.id);
+        const pathColorVal = pathNodeColors.get(n.id);
+        const inPath = highlightedPath.has(n.id);
         return {
           id: n.id,
           label: n.label,
           color: {
-            background: highlightedPath.has(n.id)
-              ? "#f59e0b"
-              : algoColor ?? tableColor(n.table),
+            background: pathColorVal ?? (inPath ? "#f59e0b" : algoColor ?? tableColor(n.table)),
             border: selectedNodes.includes(n.id) ? "#ffffff" : "#374151",
             highlight: { background: "#60a5fa", border: "#ffffff" },
             hover: { background: "#93c5fd", border: "#ffffff" },
           },
           borderWidth: selectedNodes.includes(n.id) ? 3 : 2,
-          size: highlightedPath.has(n.id) ? 24 : algoColor ? 22 : n.expanded ? 22 : 18,
+          size: inPath ? 24 : algoColor ? 22 : n.expanded ? 22 : 18,
         };
       });
 
-      const visEdgeList = visibleEdges.map((e) => ({
-        id: e.id,
-        from: e.from,
-        to: e.to,
-        label: e.label,
-        color: highlightedEdges.has(e.id)
-          ? { color: "#f59e0b", highlight: "#f59e0b" }
-          : undefined,
-        width: highlightedEdges.has(e.id) ? 3 : 1.5,
-      }));
+      const visEdgeList = visibleEdges.map((e) => {
+        const pathColorVal = pathEdgeColors.get(e.id);
+        const isPathEdge = highlightedEdges.has(e.id);
+        const hopLabel = pathHopLabels.get(e.id);
+        const baseLabel = e.label;
+        // Show "label (#hop)" when this edge is part of a highlighted path.
+        const renderedLabel =
+          isPathEdge && hopLabel ? `${baseLabel} (#${hopLabel})` : baseLabel;
+        return {
+          id: e.id,
+          from: e.from,
+          to: e.to,
+          label: renderedLabel,
+          color: pathColorVal
+            ? { color: pathColorVal, highlight: pathColorVal }
+            : isPathEdge
+              ? { color: "#f59e0b", highlight: "#f59e0b" }
+              : undefined,
+          width: isPathEdge ? 3 : 1.5,
+        };
+      });
 
       // Arrange circular layout manually if selected
       if (layout === "circular" && visNodes.length > 0) {
@@ -278,7 +315,7 @@ export function GraphExplorer({
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visibleNodes, visibleEdges, highlightedPath, highlightedEdges, selectedNodes, networkOptions, layout, algorithmColors]);
+  }, [visibleNodes, visibleEdges, highlightedPath, highlightedEdges, pathNodeColors, pathEdgeColors, pathHopLabels, selectedNodes, networkOptions, layout, algorithmColors]);
 
   const handleNodeClick = useCallback(
     (nodeId: string, shift: boolean) => {
@@ -315,15 +352,26 @@ export function GraphExplorer({
       setError(null);
 
       try {
-        const result = await traverseNode(
-          database,
-          node.table,
-          node.pk,
-          direction,
-          node.depth,
-          undefined,
-          connectionParams
-        );
+        const result = useVariableLength
+          ? await variableLengthTraverse(
+              database,
+              node.table,
+              node.pk,
+              direction,
+              node.depth,
+              { minDepth, maxDepth: traversalMaxDepth },
+              undefined,
+              connectionParams
+            )
+          : await traverseNode(
+              database,
+              node.table,
+              node.pk,
+              direction,
+              node.depth,
+              undefined,
+              connectionParams
+            );
 
         setNodes((prev) => {
           const next = new Map(prev);
@@ -356,7 +404,7 @@ export function GraphExplorer({
         setLoading(false);
       }
     },
-    [database, nodes, connectionParams]
+    [database, nodes, connectionParams, useVariableLength, minDepth, traversalMaxDepth]
   );
 
   const removeNode = useCallback((nodeId: string) => {
@@ -408,106 +456,96 @@ export function GraphExplorer({
     setError(null);
 
     try {
-      const result = await findShortestPath(
+      const result = await findShortestPathsWithSelector(
         database,
         src.table,
         src.pk,
         tgt.table,
         tgt.pk,
+        pathSelector,
+        pathSelector === "shortest_k" ? pathK : undefined,
         connectionParams
       );
 
-      // Parse path result — expect rows with table/id pairs
-      const pathNodes = new Set<string>();
-      const pathEdges = new Set<string>();
+      const pathSet = parsePathSet(pathSelector, result);
 
-      const colIdx = new Map<string, number>();
-      result.columns.forEach((col, i) =>
-        colIdx.set(col.toLowerCase(), i)
-      );
-
-      const srcTableIdx =
-        colIdx.get("source_table") ?? colIdx.get("src_table") ?? -1;
-      const srcIdIdx =
-        colIdx.get("source_id") ?? colIdx.get("src_id") ?? -1;
-      const edgeTypeIdx =
-        colIdx.get("edge_type") ?? colIdx.get("edgetype") ?? -1;
-      const tgtTableIdx =
-        colIdx.get("target_table") ?? colIdx.get("tgt_table") ?? -1;
-      const tgtIdIdx =
-        colIdx.get("target_id") ?? colIdx.get("tgt_id") ?? -1;
-
-      if (srcTableIdx >= 0 && tgtTableIdx >= 0) {
-        for (const row of result.rows) {
-          const sTable = String(row[srcTableIdx]);
-          const sId = String(row[srcIdIdx]);
-          const tTable = String(row[tgtTableIdx]);
-          const tId = String(row[tgtIdIdx]);
-          const edgeType = edgeTypeIdx >= 0 ? String(row[edgeTypeIdx]) : "edge";
-
-          const sNodeId = makeNodeId(sTable, sId);
-          const tNodeId = makeNodeId(tTable, tId);
-
-          pathNodes.add(sNodeId);
-          pathNodes.add(tNodeId);
-          pathEdges.add(`${sNodeId}->${edgeType}->${tNodeId}`);
-
-          // Add missing nodes to the graph
-          if (!nodes.has(sNodeId)) {
-            setNodes((prev) => {
-              const next = new Map(prev);
-              next.set(sNodeId, {
-                id: sNodeId,
-                table: sTable,
-                pk: sId,
-                label: `${sTable}:${sId}`,
-                expanded: false,
-                depth: 0,
-              });
-              return next;
+      // Backfill missing nodes/edges that the path references but the graph
+      // doesn't yet contain. We extract table/pk from the colon-separated
+      // node id and a synthetic edge type from the edge id.
+      setNodes((prev) => {
+        const next = new Map(prev);
+        for (const path of pathSet.paths) {
+          for (const nid of path.nodeIds) {
+            if (next.has(nid)) continue;
+            const { table, pk } = parseNodeId(nid);
+            next.set(nid, {
+              id: nid,
+              table,
+              pk,
+              label: `${table}:${pk}`,
+              expanded: false,
+              depth: 0,
             });
           }
-          if (!nodes.has(tNodeId)) {
-            setNodes((prev) => {
-              const next = new Map(prev);
-              next.set(tNodeId, {
-                id: tNodeId,
-                table: tTable,
-                pk: tId,
-                label: `${tTable}:${tId}`,
-                expanded: false,
-                depth: 0,
-              });
-              return next;
-            });
-          }
-
-          // Add missing edges
-          const edgeId = `${sNodeId}->${edgeType}->${tNodeId}`;
-          setEdges((prev) => {
-            const next = new Map(prev);
-            if (!next.has(edgeId)) {
-              next.set(edgeId, {
-                id: edgeId,
-                from: sNodeId,
-                to: tNodeId,
-                edgeType,
-                label: edgeType,
-              });
-            }
-            return next;
-          });
         }
+        return next;
+      });
+
+      setEdges((prev) => {
+        const next = new Map(prev);
+        for (const path of pathSet.paths) {
+          for (let i = 0; i < path.edgeIds.length; i++) {
+            const eid = path.edgeIds[i];
+            if (next.has(eid)) continue;
+            // edge id format: "from->edgeType->to"
+            const parts = eid.split("->");
+            const from = path.nodeIds[i];
+            const to = path.nodeIds[i + 1];
+            const edgeType = parts.length === 3 ? parts[1] : "edge";
+            next.set(eid, {
+              id: eid,
+              from,
+              to,
+              edgeType,
+              label: edgeType,
+            });
+          }
+        }
+        return next;
+      });
+
+      // Build highlight maps + hop labels (1-indexed).
+      const { nodeColors, edgeColors } = pathSetToHighlightMaps(pathSet);
+      const hopLabels = new Map<string, string>();
+      pathSet.paths.forEach((path) => {
+        path.edgeIds.forEach((eid, i) => {
+          if (!hopLabels.has(eid)) hopLabels.set(eid, String(i + 1));
+        });
+      });
+
+      const allNodeIds = new Set<string>();
+      const allEdgeIds = new Set<string>();
+      for (const p of pathSet.paths) {
+        p.nodeIds.forEach((id) => allNodeIds.add(id));
+        p.edgeIds.forEach((id) => allEdgeIds.add(id));
       }
 
-      setHighlightedPath(pathNodes);
-      setHighlightedEdges(pathEdges);
+      setHighlightedPath(allNodeIds);
+      setHighlightedEdges(allEdgeIds);
+      setPathNodeColors(nodeColors);
+      setPathEdgeColors(edgeColors);
+      setPathHopLabels(hopLabels);
+      setActivePathSet(pathSet);
+
+      if (pathSet.paths.length === 0) {
+        setError("No path found between selected nodes");
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Path finding failed");
     } finally {
       setLoading(false);
     }
-  }, [database, nodes, selectedNodes]);
+  }, [database, nodes, selectedNodes, pathSelector, pathK, connectionParams]);
 
   const handleAddStartNode = useCallback(async () => {
     if (!startTable || !startId) return;
@@ -542,6 +580,10 @@ export function GraphExplorer({
     setSelectedNodes([]);
     setHighlightedPath(new Set());
     setHighlightedEdges(new Set());
+    setPathNodeColors(new Map());
+    setPathEdgeColors(new Map());
+    setPathHopLabels(new Map());
+    setActivePathSet(null);
     setDetailNode(null);
     setError(null);
   }, []);
@@ -549,6 +591,10 @@ export function GraphExplorer({
   const handleClearPath = useCallback(() => {
     setHighlightedPath(new Set());
     setHighlightedEdges(new Set());
+    setPathNodeColors(new Map());
+    setPathEdgeColors(new Map());
+    setPathHopLabels(new Map());
+    setActivePathSet(null);
   }, []);
 
   const toggleEdgeTypeFilter = useCallback((edgeType: string) => {
@@ -667,6 +713,33 @@ export function GraphExplorer({
         <div className="w-px h-5 bg-gray-700" />
 
         {/* Path finding */}
+        <div className="flex items-center gap-1">
+          <span className="text-xs text-gray-500">Path:</span>
+          <select
+            value={pathSelector}
+            onChange={(e) => setPathSelector(e.target.value as PathSelector)}
+            aria-label="Path selector"
+            className="bg-gray-800 text-gray-200 text-xs px-2 py-1 rounded border border-gray-700"
+          >
+            <option value="any_shortest">ANY SHORTEST</option>
+            <option value="all_shortest">ALL SHORTEST</option>
+            <option value="shortest_k">SHORTEST K</option>
+          </select>
+          {pathSelector === "shortest_k" && (
+            <input
+              type="number"
+              min={1}
+              max={50}
+              value={pathK}
+              onChange={(e) => {
+                const v = parseInt(e.target.value, 10);
+                setPathK(Number.isFinite(v) && v >= 1 ? v : 1);
+              }}
+              aria-label="K value for SHORTEST K"
+              className="bg-gray-800 text-gray-200 text-xs px-2 py-1 rounded border border-gray-700 w-14"
+            />
+          )}
+        </div>
         <button
           onClick={handleFindPath}
           disabled={selectedNodes.length !== 2 || loading}
@@ -683,6 +756,55 @@ export function GraphExplorer({
             Clear Path
           </button>
         )}
+
+        <div className="w-px h-5 bg-gray-700" />
+
+        {/* Variable-length traversal controls */}
+        <div className="flex items-center gap-1">
+          <label className="flex items-center gap-1 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={useVariableLength}
+              onChange={(e) => setUseVariableLength(e.target.checked)}
+              aria-label="Use variable-length traversal"
+              className="w-3 h-3 rounded accent-blue-500"
+            />
+            <span className="text-xs text-gray-500">Var-length</span>
+          </label>
+          {useVariableLength && (
+            <>
+              <input
+                type="number"
+                min={0}
+                max={20}
+                value={minDepth}
+                onChange={(e) => {
+                  const v = parseInt(e.target.value, 10);
+                  setMinDepth(Number.isFinite(v) && v >= 0 ? v : 0);
+                }}
+                aria-label="Minimum depth"
+                title="Minimum hops"
+                className="bg-gray-800 text-gray-200 text-xs px-2 py-1 rounded border border-gray-700 w-12"
+              />
+              <span className="text-xs text-gray-500">..</span>
+              <input
+                type="number"
+                min={Math.max(0, minDepth)}
+                max={20}
+                value={traversalMaxDepth}
+                onChange={(e) => {
+                  const v = parseInt(e.target.value, 10);
+                  setTraversalMaxDepth(
+                    Number.isFinite(v) && v >= minDepth ? v : minDepth
+                  );
+                }}
+                aria-label="Maximum depth"
+                title="Maximum hops"
+                className="bg-gray-800 text-gray-200 text-xs px-2 py-1 rounded border border-gray-700 w-12"
+              />
+            </>
+          )}
+        </div>
 
         <div className="flex-1" />
 
@@ -884,6 +1006,32 @@ export function GraphExplorer({
                         <span className="text-xs text-gray-500">{key}: </span>
                         <span className="text-xs text-gray-300">
                           {value === null ? "null" : String(value)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Path results */}
+              {activePathSet && activePathSet.paths.length > 0 && (
+                <div className="p-2 border-b border-gray-800">
+                  <div className="text-xs text-gray-500 mb-1 font-medium">
+                    Paths ({activePathSet.paths.length})
+                  </div>
+                  <div className="space-y-1.5">
+                    {activePathSet.paths.map((p, i) => (
+                      <div
+                        key={p.id}
+                        className="flex items-center gap-1.5"
+                        title={p.nodeIds.join(" -> ")}
+                      >
+                        <span
+                          className="w-2.5 h-2.5 rounded-full shrink-0"
+                          style={{ backgroundColor: pathColor(i) }}
+                        />
+                        <span className="text-xs text-gray-300">
+                          Path {i + 1}: {p.length} hop{p.length === 1 ? "" : "s"}
                         </span>
                       </div>
                     ))}

@@ -39,6 +39,59 @@ export function isTraverseQuery(sql: string): boolean {
 }
 
 /**
+ * Detect if a SQL string is a MATCH query (new SELECT ... FROM MATCH syntax).
+ * Matches: SELECT ... FROM MATCH ...
+ */
+export function isMatchQuery(sql: string): boolean {
+  return /\bFROM\s+MATCH\b/i.test(sql);
+}
+
+/**
+ * Detect if a SQL string is any kind of graph query
+ * (TRAVERSE or new MATCH syntax).
+ */
+export function isGraphQuery(sql: string): boolean {
+  return isTraverseQuery(sql) || isMatchQuery(sql);
+}
+
+/**
+ * Extract the path-selector head from a MATCH query.
+ * Returns one of: "any_shortest", "all_shortest", "shortest_k", or null
+ * if no selector is present.
+ */
+export function parsePathSelector(
+  sql: string
+): { selector: "any_shortest" | "all_shortest" | "shortest_k"; k?: number } | null {
+  // ANY SHORTEST PATH
+  if (/\bMATCH\s+ANY\s+SHORTEST\s+PATH\b/i.test(sql)) {
+    return { selector: "any_shortest" };
+  }
+  // ALL SHORTEST PATH
+  if (/\bMATCH\s+ALL\s+SHORTEST\s+PATH\b/i.test(sql)) {
+    return { selector: "all_shortest" };
+  }
+  // SHORTEST <k> PATH
+  const m = sql.match(/\bMATCH\s+SHORTEST\s+(\d+)\s+PATH\b/i);
+  if (m) {
+    return { selector: "shortest_k", k: parseInt(m[1], 10) };
+  }
+  return null;
+}
+
+/**
+ * Parse the hop quantifier from a MATCH variable-length pattern,
+ * e.g. `[r*1..3]` -> { min: 1, max: 3 }.
+ * Returns null if no quantifier is present.
+ */
+export function parseHopQuantifier(
+  sql: string
+): { min: number; max: number } | null {
+  const m = sql.match(/\*\s*(\d+)\s*\.\.\s*(\d+)/);
+  if (!m) return null;
+  return { min: parseInt(m[1], 10), max: parseInt(m[2], 10) };
+}
+
+/**
  * Build an edge-mode variant of a TRAVERSE query.
  *
  * 1. Replaces the SELECT list with `*` (edge mode has a different output schema).

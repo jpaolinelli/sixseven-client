@@ -61,3 +61,41 @@ export interface ContextMenuState {
   y: number;
   nodeId: string;
 }
+
+/**
+ * Path selector for shortest-path style queries.
+ *
+ *  - `any_shortest`: a single arbitrary shortest path
+ *  - `all_shortest`: every minimum-length shortest path
+ *  - `shortest_k`:   the K shortest paths (length-ordered)
+ */
+export type PathSelector = "any_shortest" | "all_shortest" | "shortest_k";
+
+/** A single ordered path between two graph nodes. */
+export interface GraphPath {
+  /** Stable identifier for the path (e.g. index-based). */
+  id: string;
+  /** Ordered list of node ids (from source -> target). */
+  nodeIds: string[];
+  /** Ordered list of edge ids in traversal order (length = nodeIds.length - 1). */
+  edgeIds: string[];
+  /** Total length (number of edges / hops). */
+  length: number;
+}
+
+/**
+ * A collection of one or more paths returned by a path-selector query.
+ * Highlight color per path is assigned by the visualization layer.
+ */
+export interface PathSet {
+  selector: PathSelector;
+  paths: GraphPath[];
+}
+
+/** Variable-length traversal configuration. */
+export interface VariableLengthTraversal {
+  /** Minimum number of hops (inclusive). */
+  minDepth: number;
+  /** Maximum number of hops (inclusive). */
+  maxDepth: number;
+}

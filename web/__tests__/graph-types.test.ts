@@ -7,6 +7,10 @@ import type {
   GraphFilters,
   ContextMenuState,
   TraverseResult,
+  PathSelector,
+  GraphPath,
+  PathSet,
+  VariableLengthTraversal,
 } from "@/lib/graph-types";
 
 describe("GraphNode type", () => {
@@ -137,5 +141,51 @@ describe("TraverseResult", () => {
     };
     expect(result.nodes).toHaveLength(1);
     expect(result.edges).toHaveLength(1);
+  });
+});
+
+describe("PathSelector type", () => {
+  it("accepts the three valid selector values", () => {
+    const values: PathSelector[] = ["any_shortest", "all_shortest", "shortest_k"];
+    expect(values).toHaveLength(3);
+    expect(values).toContain("any_shortest");
+    expect(values).toContain("all_shortest");
+    expect(values).toContain("shortest_k");
+  });
+});
+
+describe("GraphPath type", () => {
+  it("can represent an ordered path", () => {
+    const path: GraphPath = {
+      id: "1",
+      nodeIds: ["a:1", "a:2", "a:3"],
+      edgeIds: ["a:1->e->a:2", "a:2->e->a:3"],
+      length: 2,
+    };
+    expect(path.nodeIds).toHaveLength(3);
+    expect(path.edgeIds).toHaveLength(2);
+    expect(path.length).toBe(2);
+  });
+});
+
+describe("PathSet type", () => {
+  it("can represent a multi-path result", () => {
+    const set: PathSet = {
+      selector: "all_shortest",
+      paths: [
+        { id: "1", nodeIds: ["a:1", "a:2"], edgeIds: ["a:1->e->a:2"], length: 1 },
+        { id: "2", nodeIds: ["a:1", "a:3"], edgeIds: ["a:1->e->a:3"], length: 1 },
+      ],
+    };
+    expect(set.selector).toBe("all_shortest");
+    expect(set.paths).toHaveLength(2);
+  });
+});
+
+describe("VariableLengthTraversal type", () => {
+  it("stores min and max depth", () => {
+    const config: VariableLengthTraversal = { minDepth: 1, maxDepth: 5 };
+    expect(config.minDepth).toBe(1);
+    expect(config.maxDepth).toBe(5);
   });
 });
