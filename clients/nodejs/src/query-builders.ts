@@ -21,11 +21,120 @@ function escapeIdentifier(name: string): string {
 }
 
 function assertPositiveInt(value: number, name: string): void {
-  if (!Number.isInteger(value) || value < 1) {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
     throw new TypeError(
       `${name} must be a positive integer, got ${value}`,
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// Algorithm builder helpers (GDB-492)
+// ---------------------------------------------------------------------------
+
+const VALID_DEGREE_DIRECTIONS = ['IN', 'OUT', 'BOTH'] as const;
+const VALID_CLOSENESS_VARIANTS = [
+  'STANDARD',
+  'WASSERMAN_FAUST',
+  'HARMONIC',
+] as const;
+
+export type DegreeDirection = (typeof VALID_DEGREE_DIRECTIONS)[number];
+export type ClosenessVariant = (typeof VALID_CLOSENESS_VARIANTS)[number];
+
+/**
+ * Validate that a value is a non-empty (after trimming) string.
+ *
+ * Rejects whitespace-only strings to prevent SQL that ends up referencing
+ * an empty edge type.
+ */
+function assertNonEmptyString(value: unknown, name: string): asserts value is string {
+  if (typeof value !== 'string') {
+    throw new TypeError(`${name} must be a string, got ${typeof value}`);
+  }
+  if (value.trim().length === 0) {
+    throw new TypeError(`${name} must be a non-empty string`);
+  }
+}
+
+/**
+ * Validate that a value is a finite number (rejects NaN and Infinity).
+ *
+ * Booleans coerce to numbers in JS but are not what callers mean here, so
+ * reject them explicitly.
+ */
+function assertFiniteNumber(value: unknown, name: string): asserts value is number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new TypeError(`${name} must be a finite number, got ${value}`);
+  }
+}
+
+/**
+ * Validate that a value is a number in the open interval (0, 1).
+ */
+function assertProbability(value: unknown, name: string): asserts value is number {
+  assertFiniteNumber(value, name);
+  if (value <= 0 || value >= 1) {
+    throw new RangeError(
+      `${name} must be between 0 and 1 (exclusive), got ${value}`,
+    );
+  }
+}
+
+/**
+ * Validate that a value is a strictly positive (>0) finite number.
+ */
+function assertPositiveNumber(value: unknown, name: string): asserts value is number {
+  assertFiniteNumber(value, name);
+  if (value <= 0) {
+    throw new RangeError(`${name} must be positive, got ${value}`);
+  }
+}
+
+/**
+ * Validate a user-provided SELECT projection clause.
+ *
+ * SELECT clauses cannot be parameterized — the value is interpolated directly
+ * into the SQL. To avoid trivial injection (terminating the query, smuggling a
+ * second statement, comments, etc.), reject any string containing semicolons,
+ * SQL comment sequences, or null bytes. Callers needing complex projections
+ * should compose them outside the builder.
+ */
+function assertSafeSelect(value: unknown, name: string): asserts value is string {
+  if (typeof value !== 'string') {
+    throw new TypeError(`${name} must be a string, got ${typeof value}`);
+  }
+  if (value.trim().length === 0) {
+    throw new TypeError(`${name} must be a non-empty string`);
+  }
+  if (
+    value.includes(';') ||
+    value.includes('--') ||
+    value.includes('/*') ||
+    value.includes('*/') ||
+    value.includes('\0')
+  ) {
+    throw new TypeError(
+      `${name} contains disallowed SQL characters (\";\", \"--\", \"/*\", \"*/\", null byte)`,
+    );
+  }
+}
+
+export interface AlgorithmQuery {
+  text: string;
+  values: unknown[];
+}
+
+function buildAlgorithmSql(
+  funcName: string,
+  values: unknown[],
+  select: string,
+): AlgorithmQuery {
+  const placeholders = values.map((_, i) => `$${i + 1}`).join(', ');
+  return {
+    text: `SELECT ${select} FROM ${funcName}(${placeholders})`,
+    values,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -328,4 +437,248 @@ export function buildShortestPath(
   }
 
   return { text: sql, values };
+}
+
+// ---------------------------------------------------------------------------
+// Graph algorithm query builders (GDB-492)
+//
+// Each builder generates a SELECT against a server-side table-valued function
+// (TVF) for the corresponding graph algorithm. The edge type is bound as $1
+// and any additional algorithm parameters follow ($2, $3, ...). Generated SQL
+// has the shape:
+//
+//     SELECT <select> FROM <algorithm>($1, $2, ...)
+//
+// Callers can compose the result into JOINs, e.g.
+//
+//     SELECT u.name, p.score
+//     FROM (SELECT * FROM pagerank($1)) p
+//     JOIN users u ON u.id = p.node_id
+// ---------------------------------------------------------------------------
+
+export interface PagerankOptions {
+  /** Damping factor in (0, 1). Defaults to 0.85. */
+  damping?: number;
+  /** Power-iteration count. Defaults to 20. */
+  iterations?: number;
+  /** Projection clause (validated against trivial SQL injection). */
+  select?: string;
+}
+
+export interface PagerankRow {
+  node_id: unknown;
+  score: number;
+}
+
+export function buildPagerank(
+  edgeType: string,
+  options: PagerankOptions = {},
+): AlgorithmQuery {
+  const { damping = 0.85, iterations = 20, select = '*' } = options;
+  assertNonEmptyString(edgeType, 'edgeType');
+  assertProbability(damping, 'damping');
+  assertPositiveInt(iterations, 'iterations');
+  assertSafeSelect(select, 'select');
+  return buildAlgorithmSql('pagerank', [edgeType, damping, iterations], select);
+}
+
+export interface BetweennessCentralityRow {
+  node_id: unknown;
+  score: number;
+}
+
+export function buildBetweennessCentrality(
+  edgeType: string,
+  options: { select?: string } = {},
+): AlgorithmQuery {
+  const { select = '*' } = options;
+  assertNonEmptyString(edgeType, 'edgeType');
+  assertSafeSelect(select, 'select');
+  return buildAlgorithmSql('betweenness_centrality', [edgeType], select);
+}
+
+export interface ConnectedComponentsRow {
+  node_id: unknown;
+  component_id: number;
+}
+
+export function buildConnectedComponents(
+  edgeType: string,
+  options: { select?: string } = {},
+): AlgorithmQuery {
+  const { select = '*' } = options;
+  assertNonEmptyString(edgeType, 'edgeType');
+  assertSafeSelect(select, 'select');
+  return buildAlgorithmSql('connected_components', [edgeType], select);
+}
+
+export interface LouvainOptions {
+  /** Resolution parameter; >0. Defaults to 1.0. */
+  resolution?: number;
+  select?: string;
+}
+
+export interface LouvainRow {
+  node_id: unknown;
+  community_id: number;
+}
+
+export function buildLouvain(
+  edgeType: string,
+  options: LouvainOptions = {},
+): AlgorithmQuery {
+  const { resolution = 1.0, select = '*' } = options;
+  assertNonEmptyString(edgeType, 'edgeType');
+  assertPositiveNumber(resolution, 'resolution');
+  assertSafeSelect(select, 'select');
+  return buildAlgorithmSql('louvain', [edgeType, resolution], select);
+}
+
+export interface DegreeCentralityOptions {
+  /** Edge direction to count. Defaults to 'BOTH'. */
+  direction?: DegreeDirection | Lowercase<DegreeDirection>;
+  select?: string;
+}
+
+export interface DegreeCentralityRow {
+  node_id: unknown;
+  degree: number;
+}
+
+export function buildDegreeCentrality(
+  edgeType: string,
+  options: DegreeCentralityOptions = {},
+): AlgorithmQuery {
+  const { direction = 'BOTH', select = '*' } = options;
+  assertNonEmptyString(edgeType, 'edgeType');
+  assertNonEmptyString(direction, 'direction');
+  const upper = direction.toUpperCase() as DegreeDirection;
+  if (!VALID_DEGREE_DIRECTIONS.includes(upper)) {
+    throw new TypeError(
+      `direction must be one of ${VALID_DEGREE_DIRECTIONS.join(', ')}, got ${direction}`,
+    );
+  }
+  assertSafeSelect(select, 'select');
+  return buildAlgorithmSql('degree_centrality', [edgeType, upper], select);
+}
+
+export interface ClosenessCentralityOptions {
+  /** Closeness variant. Defaults to 'STANDARD'. */
+  variant?: ClosenessVariant | Lowercase<ClosenessVariant>;
+  select?: string;
+}
+
+export interface ClosenessCentralityRow {
+  node_id: unknown;
+  score: number;
+}
+
+export function buildClosenessCentrality(
+  edgeType: string,
+  options: ClosenessCentralityOptions = {},
+): AlgorithmQuery {
+  const { variant = 'STANDARD', select = '*' } = options;
+  assertNonEmptyString(edgeType, 'edgeType');
+  assertNonEmptyString(variant, 'variant');
+  const upper = variant.toUpperCase() as ClosenessVariant;
+  if (!VALID_CLOSENESS_VARIANTS.includes(upper)) {
+    throw new TypeError(
+      `variant must be one of ${VALID_CLOSENESS_VARIANTS.join(', ')}, got ${variant}`,
+    );
+  }
+  assertSafeSelect(select, 'select');
+  return buildAlgorithmSql('closeness_centrality', [edgeType, upper], select);
+}
+
+export interface EigenvectorCentralityOptions {
+  /** Power-iteration count. Defaults to 100. */
+  iterations?: number;
+  /** Convergence tolerance; >0. Defaults to 1e-6. */
+  tolerance?: number;
+  select?: string;
+}
+
+export interface EigenvectorCentralityRow {
+  node_id: unknown;
+  score: number;
+}
+
+export function buildEigenvectorCentrality(
+  edgeType: string,
+  options: EigenvectorCentralityOptions = {},
+): AlgorithmQuery {
+  const { iterations = 100, tolerance = 1e-6, select = '*' } = options;
+  assertNonEmptyString(edgeType, 'edgeType');
+  assertPositiveInt(iterations, 'iterations');
+  assertPositiveNumber(tolerance, 'tolerance');
+  assertSafeSelect(select, 'select');
+  return buildAlgorithmSql(
+    'eigenvector_centrality',
+    [edgeType, iterations, tolerance],
+    select,
+  );
+}
+
+export interface HarmonicCentralityRow {
+  node_id: unknown;
+  score: number;
+}
+
+export function buildHarmonicCentrality(
+  edgeType: string,
+  options: { select?: string } = {},
+): AlgorithmQuery {
+  const { select = '*' } = options;
+  assertNonEmptyString(edgeType, 'edgeType');
+  assertSafeSelect(select, 'select');
+  return buildAlgorithmSql('harmonic_centrality', [edgeType], select);
+}
+
+export interface ClusteringCoefficientRow {
+  node_id: unknown;
+  coefficient: number;
+}
+
+export function buildClusteringCoefficient(
+  edgeType: string,
+  options: { select?: string } = {},
+): AlgorithmQuery {
+  const { select = '*' } = options;
+  assertNonEmptyString(edgeType, 'edgeType');
+  assertSafeSelect(select, 'select');
+  return buildAlgorithmSql('clustering_coefficient', [edgeType], select);
+}
+
+export interface TriangleCountRow {
+  node_id: unknown;
+  triangles: number;
+}
+
+export function buildTriangleCount(
+  edgeType: string,
+  options: { select?: string } = {},
+): AlgorithmQuery {
+  const { select = '*' } = options;
+  assertNonEmptyString(edgeType, 'edgeType');
+  assertSafeSelect(select, 'select');
+  return buildAlgorithmSql('triangle_count', [edgeType], select);
+}
+
+export interface StronglyConnectedComponentsRow {
+  node_id: unknown;
+  component_id: number;
+}
+
+export function buildStronglyConnectedComponents(
+  edgeType: string,
+  options: { select?: string } = {},
+): AlgorithmQuery {
+  const { select = '*' } = options;
+  assertNonEmptyString(edgeType, 'edgeType');
+  assertSafeSelect(select, 'select');
+  return buildAlgorithmSql(
+    'strongly_connected_components',
+    [edgeType],
+    select,
+  );
 }
