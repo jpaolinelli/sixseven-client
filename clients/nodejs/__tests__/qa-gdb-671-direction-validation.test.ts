@@ -383,15 +383,13 @@ describe('GDB-672 fix — raw where/weight interpolation now rejected', () => {
     ).toThrow(TypeError);
   });
 
-  it('buildMatch `returnItems[]` interpolated raw (BUG — not addressed by GDB-672)', () => {
-    // returnItems is a separate concern not covered by GDB-672; this test
-    // documents that it still passes through raw. A future ticket should
-    // address this.
+  it('buildMatch `returnItems[]` rejects injection payload (GDB-673 fix)', () => {
     const malicious = '1, (SELECT password FROM secrets)';
-    const q = buildMatch(
-      [{ alias: 'a', table: 'users' }],
-      { returnItems: [malicious] },
-    );
-    expect(q.text).toContain(malicious);
+    expect(() =>
+      buildMatch(
+        [{ alias: 'a', table: 'users' }],
+        { returnItems: [malicious] },
+      ),
+    ).toThrow(TypeError);
   });
 });
