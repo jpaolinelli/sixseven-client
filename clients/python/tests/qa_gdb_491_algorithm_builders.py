@@ -60,49 +60,108 @@ ALL_BUILDERS = ALL_SINGLE_ARG_BUILDERS + [
 
 
 class TestSelectInjection:
-    """The ``select`` keyword arg is interpolated raw into SQL — every
-    builder is vulnerable to producing arbitrary SQL fragments via it.
-
-    These tests *document* current behaviour and assert that the raw
-    interpolation happens. They are not marked xfail because today's
-    implementation passes them; the parametrized test that *demands*
-    rejection of injection-shaped values IS marked xfail until the bug
-    is fixed.
+    """The ``select`` keyword arg used to be interpolated raw into SQL,
+    making every builder vulnerable to SQL injection. GDB-662 fixed this
+    by requiring ``select`` to be either ``"*"`` (default) or a
+    ``Sequence[str]`` of validated column identifiers — raw strings are
+    rejected outright.
     """
 
     @pytest.mark.parametrize("builder", ALL_BUILDERS)
-    def test_select_is_interpolated_raw_today(self, builder):
-        # Demonstrates the current behaviour: arbitrary text appears in
-        # the SELECT clause, including a stacked statement.
-        payload = "*; DROP TABLE users;--"
-        q = builder("knows", select=payload)
-        assert payload in q["text"], (
-            "select payload should appear raw in current implementation"
-        )
+    def test_select_raw_string_rejected(self, builder):
+        # Any raw string other than "*" must be rejected after GDB-662.
+        with pytest.raises(ValueError, match="select"):
+            builder("knows", select="node_id, score")
 
     @pytest.mark.parametrize("builder", ALL_BUILDERS)
-    @pytest.mark.xfail(
-        reason="Bug: select is interpolated without validation; allows SQL injection",
-        strict=True,
-    )
     def test_select_should_reject_stacked_statements(self, builder):
         with pytest.raises((ValueError, TypeError)):
             builder("knows", select="*; DROP TABLE users;--")
 
     @pytest.mark.parametrize("builder", ALL_BUILDERS)
-    @pytest.mark.xfail(
-        reason="Bug: select accepts empty string and produces malformed 'SELECT  FROM ...' SQL",
-        strict=True,
-    )
+    def test_select_should_reject_stacked_statements_in_list(self, builder):
+        with pytest.raises(ValueError, match="select"):
+            builder("knows", select=["node_id; DROP TABLE users;--"])
+
+    @pytest.mark.parametrize("builder", ALL_BUILDERS)
+    def test_select_should_reject_comment_payload(self, builder):
+        with pytest.raises(ValueError, match="select"):
+            builder("knows", select=["node_id /* comment */"])
+
+    @pytest.mark.parametrize("builder", ALL_BUILDERS)
+    def test_select_should_reject_union_select(self, builder):
+        with pytest.raises(ValueError, match="select"):
+            builder("knows", select="* UNION SELECT password FROM users")
+
+    @pytest.mark.parametrize("builder", ALL_BUILDERS)
     def test_select_empty_string_rejected(self, builder):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="select"):
             builder("knows", select="")
 
     @pytest.mark.parametrize("builder", ALL_BUILDERS)
-    def test_select_empty_string_today_produces_malformed_sql(self, builder):
-        # Today, an empty select silently produces a broken statement.
-        q = builder("knows", select="")
-        assert "SELECT  FROM" in q["text"]
+    def test_select_empty_list_rejected(self, builder):
+        with pytest.raises(ValueError, match="select"):
+            builder("knows", select=[])
+
+    @pytest.mark.parametrize("builder", ALL_BUILDERS)
+    @pytest.mark.parametrize(
+        "bad_identifier",
+        [
+            "1node_id",        # leading digit
+            "node-id",         # hyphen
+            "node id",         # space
+            "node;id",         # semicolon
+            "node/*x*/id",     # comment characters
+            "node--id",        # SQL comment
+            '"node_id"',       # already-quoted
+            "",                # empty identifier
+            "node_id, score",  # comma-joined string passed inside list
+        ],
+    )
+    def test_select_should_reject_malformed_identifier(
+        self, builder, bad_identifier
+    ):
+        with pytest.raises(ValueError, match="select"):
+            builder("knows", select=[bad_identifier])
+
+    @pytest.mark.parametrize("builder", ALL_BUILDERS)
+    def test_select_should_reject_non_string_identifier(self, builder):
+        with pytest.raises(ValueError, match="select"):
+            builder("knows", select=[123])  # type: ignore[list-item]
+
+    @pytest.mark.parametrize("builder", ALL_BUILDERS)
+    def test_select_should_reject_non_sequence(self, builder):
+        with pytest.raises(ValueError, match="select"):
+            builder("knows", select=42)  # type: ignore[arg-type]
+
+    @pytest.mark.parametrize("builder", ALL_BUILDERS)
+    def test_select_star_default_unchanged(self, builder):
+        # Default "*" continues to work as before.
+        q = builder("knows")
+        assert q["text"].startswith("SELECT * FROM ")
+
+    @pytest.mark.parametrize("builder", ALL_BUILDERS)
+    def test_select_none_treated_as_star(self, builder):
+        q = builder("knows", select=None)
+        assert q["text"].startswith("SELECT * FROM ")
+
+    @pytest.mark.parametrize("builder", ALL_BUILDERS)
+    def test_select_single_valid_column(self, builder):
+        q = builder("knows", select=["node_id"])
+        assert q["text"].startswith('SELECT "node_id" FROM ')
+
+    @pytest.mark.parametrize("builder", ALL_BUILDERS)
+    def test_select_multiple_valid_columns(self, builder):
+        q = builder("knows", select=["node_id", "score", "rank"])
+        assert q["text"].startswith(
+            'SELECT "node_id", "score", "rank" FROM '
+        )
+
+    @pytest.mark.parametrize("builder", ALL_BUILDERS)
+    def test_select_tuple_accepted(self, builder):
+        # Any Sequence[str] is fine, not just lists.
+        q = builder("knows", select=("a", "b"))
+        assert q["text"].startswith('SELECT "a", "b" FROM ')
 
 
 # ---------------------------------------------------------------------------

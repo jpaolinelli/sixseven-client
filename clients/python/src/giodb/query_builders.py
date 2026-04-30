@@ -6,7 +6,8 @@ designed for use with the extended query protocol ($1, $2, ...).
 
 from __future__ import annotations
 
-from typing import Any, Union
+import re
+from typing import Any, Sequence, Union
 
 import numpy as np
 
@@ -346,15 +347,85 @@ def _validate_positive_number(value: Any, name: str) -> None:
         raise ValueError(f"{name} must be positive, got {value}")
 
 
+# Strict identifier pattern for column names accepted by ``select``.
+# Only ASCII letters, digits, and underscores; must not start with a digit.
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _validate_select(select: Union[str, Sequence[str], None]) -> str:
+    """Validate ``select`` and return the SQL fragment to interpolate.
+
+    Accepts:
+      * ``"*"`` (the default sentinel) — returns ``"*"``.
+      * ``None`` — treated as ``"*"``.
+      * A ``Sequence[str]`` of column identifiers. Each identifier must
+        match ``^[A-Za-z_][A-Za-z0-9_]*$``. Identifiers are quoted with
+        :func:`escape_identifier` and joined with ``", "``.
+
+    Rejects everything else (including arbitrary strings) with
+    :class:`ValueError`. This prevents SQL injection via the ``select``
+    parameter — see GDB-662.
+    """
+    if select is None or select == "*":
+        return "*"
+
+    if isinstance(select, str):
+        # Bare strings are no longer accepted because they were the source
+        # of the SQL-injection bug. Callers that previously passed
+        # ``select="col_a, col_b"`` must now pass ``select=["col_a", "col_b"]``.
+        raise ValueError(
+            "select must be '*' or a sequence of column identifiers; "
+            "raw strings are not accepted (use a list of column names)"
+        )
+
+    # Reject str-like sequences (bytes, bytearray) explicitly.
+    if isinstance(select, (bytes, bytearray)):
+        raise ValueError(
+            "select must be '*' or a sequence of column identifiers, "
+            f"got {type(select).__name__}"
+        )
+
+    try:
+        columns = list(select)
+    except TypeError as exc:
+        raise ValueError(
+            "select must be '*' or a sequence of column identifiers, "
+            f"got {type(select).__name__}"
+        ) from exc
+
+    if not columns:
+        raise ValueError("select must contain at least one column identifier")
+
+    quoted: list[str] = []
+    for col in columns:
+        if not isinstance(col, str):
+            raise ValueError(
+                "select column identifiers must be strings, "
+                f"got {type(col).__name__}"
+            )
+        if not _IDENTIFIER_RE.match(col):
+            raise ValueError(
+                f"select column identifier {col!r} is not a valid identifier "
+                "(must match ^[A-Za-z_][A-Za-z0-9_]*$)"
+            )
+        quoted.append(escape_identifier(col))
+
+    return ", ".join(quoted)
+
+
 def _algorithm_sql(
     func_name: str,
     values: list[Any],
     *,
-    select: str = "*",
+    select: Union[str, Sequence[str], None] = "*",
 ) -> dict[str, Any]:
-    """Construct the standard ``SELECT <select> FROM <func>($1, $2, ...)`` SQL."""
+    """Construct the standard ``SELECT <select> FROM <func>($1, $2, ...)`` SQL.
+
+    ``select`` is validated by :func:`_validate_select`. See GDB-662.
+    """
+    select_sql = _validate_select(select)
     placeholders = ", ".join(f"${i + 1}" for i in range(len(values)))
-    text = f"SELECT {select} FROM {func_name}({placeholders})"
+    text = f"SELECT {select_sql} FROM {func_name}({placeholders})"
     return {"text": text, "values": values}
 
 
@@ -363,7 +434,7 @@ def build_pagerank(
     damping: float = 0.85,
     iterations: int = 20,
     *,
-    select: str = "*",
+    select: Union[str, Sequence[str], None] = "*",
 ) -> dict[str, Any]:
     """Build a PageRank query.
 
@@ -383,7 +454,7 @@ def build_pagerank(
 def build_betweenness_centrality(
     edge_type: str,
     *,
-    select: str = "*",
+    select: Union[str, Sequence[str], None] = "*",
 ) -> dict[str, Any]:
     """Build a betweenness centrality query.
 
@@ -396,7 +467,7 @@ def build_betweenness_centrality(
 def build_connected_components(
     edge_type: str,
     *,
-    select: str = "*",
+    select: Union[str, Sequence[str], None] = "*",
 ) -> dict[str, Any]:
     """Build a connected components query.
 
@@ -410,7 +481,7 @@ def build_louvain(
     edge_type: str,
     resolution: float = 1.0,
     *,
-    select: str = "*",
+    select: Union[str, Sequence[str], None] = "*",
 ) -> dict[str, Any]:
     """Build a Louvain community detection query.
 
@@ -430,7 +501,7 @@ def build_degree_centrality(
     edge_type: str,
     direction: str = "BOTH",
     *,
-    select: str = "*",
+    select: Union[str, Sequence[str], None] = "*",
 ) -> dict[str, Any]:
     """Build a degree centrality query.
 
@@ -457,7 +528,7 @@ def build_closeness_centrality(
     edge_type: str,
     variant: str = "STANDARD",
     *,
-    select: str = "*",
+    select: Union[str, Sequence[str], None] = "*",
 ) -> dict[str, Any]:
     """Build a closeness centrality query.
 
@@ -485,7 +556,7 @@ def build_eigenvector_centrality(
     iterations: int = 100,
     tolerance: float = 1e-6,
     *,
-    select: str = "*",
+    select: Union[str, Sequence[str], None] = "*",
 ) -> dict[str, Any]:
     """Build an eigenvector centrality query.
 
@@ -505,7 +576,7 @@ def build_eigenvector_centrality(
 def build_harmonic_centrality(
     edge_type: str,
     *,
-    select: str = "*",
+    select: Union[str, Sequence[str], None] = "*",
 ) -> dict[str, Any]:
     """Build a harmonic centrality query.
 
@@ -518,7 +589,7 @@ def build_harmonic_centrality(
 def build_clustering_coefficient(
     edge_type: str,
     *,
-    select: str = "*",
+    select: Union[str, Sequence[str], None] = "*",
 ) -> dict[str, Any]:
     """Build a clustering coefficient query.
 
@@ -531,7 +602,7 @@ def build_clustering_coefficient(
 def build_triangle_count(
     edge_type: str,
     *,
-    select: str = "*",
+    select: Union[str, Sequence[str], None] = "*",
 ) -> dict[str, Any]:
     """Build a triangle count query.
 
@@ -544,7 +615,7 @@ def build_triangle_count(
 def build_strongly_connected_components(
     edge_type: str,
     *,
-    select: str = "*",
+    select: Union[str, Sequence[str], None] = "*",
 ) -> dict[str, Any]:
     """Build a strongly connected components query.
 

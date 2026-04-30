@@ -31,8 +31,8 @@ class TestBuildPagerank:
         assert q["values"] == ["follows", 0.9, 50]
 
     def test_custom_select(self):
-        q = build_pagerank("knows", select="node_id, score")
-        assert q["text"] == "SELECT node_id, score FROM pagerank($1, $2, $3)"
+        q = build_pagerank("knows", select=["node_id", "score"])
+        assert q["text"] == 'SELECT "node_id", "score" FROM pagerank($1, $2, $3)'
 
     def test_damping_int_coerced_to_float(self):
         # An int in (0, 1) is impossible, but check basic non-bool int handling.
@@ -80,8 +80,8 @@ class TestBuildBetweennessCentrality:
         assert q["values"] == ["knows"]
 
     def test_custom_select(self):
-        q = build_betweenness_centrality("knows", select="node_id")
-        assert q["text"] == "SELECT node_id FROM betweenness_centrality($1)"
+        q = build_betweenness_centrality("knows", select=["node_id"])
+        assert q["text"] == 'SELECT "node_id" FROM betweenness_centrality($1)'
 
     def test_invalid_edge_type(self):
         with pytest.raises(ValueError, match="edge_type"):
@@ -254,9 +254,9 @@ class TestBuildStronglyConnectedComponents:
         assert q["values"] == ["follows"]
 
     def test_custom_select(self):
-        q = build_strongly_connected_components("follows", select="component_id")
+        q = build_strongly_connected_components("follows", select=["component_id"])
         assert q["text"] == (
-            "SELECT component_id FROM strongly_connected_components($1)"
+            'SELECT "component_id" FROM strongly_connected_components($1)'
         )
 
     def test_invalid_edge_type(self):
