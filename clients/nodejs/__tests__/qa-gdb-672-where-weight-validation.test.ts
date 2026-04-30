@@ -357,31 +357,27 @@ describe('QA GDB-672 — AC9: non-string types rejected', () => {
 // 10. ADVERSARIAL: UNION injection bypass attempt
 // ===================================================================
 
-describe('QA GDB-672 — ADVERSARIAL: UNION injection bypass', () => {
-  // UNION does not contain semicolons, comments, or parenthesized SELECT.
-  // The deny-list approach does NOT block it. This is a potential bypass.
+describe('QA GDB-672 — ADVERSARIAL: UNION injection bypass (FIXED in GDB-675)', () => {
+  // GDB-675: UNION and bare SELECT are now in the deny-list (word-boundary
+  // regex), so these payloads are rejected.
   const unionPayloads = [
     'age > 5 UNION SELECT * FROM secrets',
     'age > 5 UNION ALL SELECT password FROM users',
     'age > 5 union select 1',
   ];
 
-  for (const [name, build] of whereBuilders) {
+  for (const [name, build, param] of allBuilders) {
     for (const payload of unionPayloads) {
-      it(`${name} — UNION bypass: "${payload.slice(0, 50)}" (BUG: passes validation)`, () => {
-        // BUG: UNION injection is NOT blocked by the current deny-list.
-        // The fragment passes all deny patterns since there are no semicolons,
-        // no comments, and no parenthesized SELECT.
-        const q = build(payload);
-        expect(q.text).toContain(`WHERE ${payload}`);
+      it(`${name} (${param}) — UNION rejected: "${payload.slice(0, 50)}"`, () => {
+        expect(() => build(payload)).toThrow(/disallowed SQL keywords/i);
       });
     }
   }
 
-  it('buildShortestMatch weight — UNION bypass (BUG: passes validation)', () => {
-    const payload = 'cost UNION SELECT 1';
-    const q = shortestWeight(payload);
-    expect(q.text).toContain(`WEIGHT ${payload}`);
+  it('buildShortestMatch weight — UNION rejected', () => {
+    expect(() => shortestWeight('cost UNION SELECT 1')).toThrow(
+      /disallowed SQL keywords/i,
+    );
   });
 });
 
@@ -391,12 +387,18 @@ describe('QA GDB-672 — ADVERSARIAL: UNION injection bypass', () => {
 
 describe('QA GDB-672 — ADVERSARIAL: Unicode tricks', () => {
   // Unicode full-width semicolon U+FF1B
-  it('full-width semicolon is not caught by ASCII ; pattern', () => {
+  it('full-width semicolon is not caught by ASCII ; pattern (but DROP keyword is — GDB-675)', () => {
+    // The regex /;/ only matches ASCII semicolon, so the full-width form
+    // passes through that check. However, after GDB-675 the trailing
+    // `DROP TABLE users` is now blocked by the keyword deny-list.
     const payload = 'age > 5； DROP TABLE users';
-    // The regex /;/ only matches ASCII semicolon.
-    // Full-width semicolon passes through. Whether this is exploitable
-    // depends on the database parser.
-    const q = traverseW(payload);
+    expect(() => traverseW(payload)).toThrow(/disallowed SQL keywords/i);
+  });
+
+  it('full-width semicolon alone (no keywords) still passes — documents ASCII-only ; check', () => {
+    // Without any DML/DDL keyword, the full-width semicolon is not blocked.
+    // The injection risk depends on whether the server parser normalizes it.
+    const q = traverseW('age > 5 ， foo');
     expect(q.text).toContain('WHERE');
   });
 
@@ -435,11 +437,11 @@ describe('QA GDB-672 — ADVERSARIAL: subquery pattern bypass attempts', () => {
     expect(() => traverseW('id IN ( \t\n SELECT 1)')).toThrow(/subquer/i);
   });
 
-  // Bare SELECT without parens — NOT caught by the subquery pattern
-  it('bare SELECT without parens passes validation (BUG: not blocked)', () => {
-    const payload = 'age > 5 UNION SELECT 1';
-    const q = traverseW(payload);
-    expect(q.text).toContain(`WHERE ${payload}`);
+  // GDB-675: bare SELECT (and UNION) are now in the deny-list.
+  it('bare SELECT without parens is rejected (GDB-675 fix)', () => {
+    expect(() => traverseW('age > 5 UNION SELECT 1')).toThrow(
+      /disallowed SQL keywords/i,
+    );
   });
 
   // Mixed case sElEcT in parens
@@ -523,10 +525,9 @@ describe('QA GDB-672 — ADVERSARIAL: combined injection vectors', () => {
 // 16. ADVERSARIAL: INSERT/UPDATE/DELETE/DROP without semicolons
 // ===================================================================
 
-describe('QA GDB-672 — ADVERSARIAL: DML/DDL keywords without semicolons', () => {
-  // These payloads avoid semicolons, comments, and subqueries.
-  // They abuse the fact that the deny-list does not block standalone
-  // SQL keywords like DROP, INSERT, UPDATE, DELETE.
+describe('QA GDB-672 — ADVERSARIAL: DML/DDL keywords (FIXED in GDB-675)', () => {
+  // GDB-675: bare DML/DDL keywords are now in the deny-list and rejected
+  // via word-boundary regex.
   const ddlPayloads: Array<[string, string]> = [
     ['DROP TABLE users', 'DROP TABLE'],
     ['DELETE FROM users WHERE 1=1', 'DELETE FROM'],
@@ -539,11 +540,8 @@ describe('QA GDB-672 — ADVERSARIAL: DML/DDL keywords without semicolons', () =
 
   for (const [name, build] of whereBuilders) {
     for (const [payload, label] of ddlPayloads) {
-      it(`${name} — DML/DDL keyword "${label}" passes validation (BUG: not blocked)`, () => {
-        // BUG: These dangerous SQL statements pass through validation
-        // because they contain no semicolons, comments, or subqueries.
-        const q = build(payload);
-        expect(q.text).toContain(`WHERE ${payload}`);
+      it(`${name} — DML/DDL keyword "${label}" is rejected`, () => {
+        expect(() => build(payload)).toThrow(/disallowed SQL keywords/i);
       });
     }
   }
@@ -553,14 +551,18 @@ describe('QA GDB-672 — ADVERSARIAL: DML/DDL keywords without semicolons', () =
 // 17. ADVERSARIAL: EXEC / xp_cmdshell style payloads
 // ===================================================================
 
-describe('QA GDB-672 — ADVERSARIAL: EXEC-style payloads', () => {
-  // These would be dangerous on SQL Server but likely not on PostgreSQL.
-  // Testing to document behavior.
-  it('EXEC payload passes validation (no deny pattern matches)', () => {
-    const payload = "EXEC xp_cmdshell 'whoami'";
-    // No semicolons, no SQL comments, no parens+SELECT
-    const q = traverseW(payload);
-    expect(q.text).toContain(`WHERE ${payload}`);
+describe('QA GDB-672 — ADVERSARIAL: EXEC-style payloads (FIXED in GDB-675)', () => {
+  // GDB-675: EXEC and EXECUTE are now in the deny-list.
+  it('EXEC payload is rejected', () => {
+    expect(() => traverseW("EXEC xp_cmdshell 'whoami'")).toThrow(
+      /disallowed SQL keywords/i,
+    );
+  });
+
+  it('EXECUTE payload is rejected', () => {
+    expect(() => traverseW("EXECUTE sp_evil 'arg'")).toThrow(
+      /disallowed SQL keywords/i,
+    );
   });
 });
 
