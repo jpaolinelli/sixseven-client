@@ -24,7 +24,7 @@ async function parseResponse(res: Response) {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  vi.resetAllMocks();
 });
 
 describe("POST /api/graph", () => {
@@ -116,17 +116,17 @@ describe("POST /api/graph", () => {
           edgeType: "follows",
         })
       );
+      // quoteIdent validates identifiers without wrapping them in quotes.
       expect(mockedQuery).toHaveBeenCalledWith(
-        expect.stringContaining('EDGE "follows"'),
+        expect.stringContaining("EDGE follows"),
         "social",
         undefined
       );
     });
 
-    it("quotes table name to prevent SQL injection", async () => {
-      mockedQuery.mockResolvedValueOnce({ columns: [], rows: [] });
-
-      await POST(
+    it("rejects table names with SQL injection attempts", async () => {
+      // quoteIdent throws on identifiers that don't match [A-Za-z_][A-Za-z0-9_]*
+      const res = await POST(
         makeRequest({
           action: "traverse",
           database: "test",
@@ -134,8 +134,9 @@ describe("POST /api/graph", () => {
           id: "1",
         })
       );
-      const sql = mockedQuery.mock.calls[0][0];
-      expect(sql).toContain('"users""; DROP TABLE--"');
+      expect(res.status).toBe(500);
+      // The query should never have been issued.
+      expect(mockedQuery).not.toHaveBeenCalled();
     });
 
     it("handles numeric IDs without quotes", async () => {
@@ -183,7 +184,7 @@ describe("POST /api/graph", () => {
       expect(body.error).toContain("source/target");
     });
 
-    it("executes SHORTEST PATH query", async () => {
+    it("executes SELECT FROM MATCH ANY SHORTEST PATH by default", async () => {
       mockedQuery.mockResolvedValueOnce({
         columns: ["source_table", "source_id", "edge_type", "target_table", "target_id"],
         rows: [
@@ -203,11 +204,164 @@ describe("POST /api/graph", () => {
         })
       );
       expect(res.status).toBe(200);
-      expect(mockedQuery).toHaveBeenCalledWith(
-        expect.stringContaining("SHORTEST PATH"),
-        "social",
-        undefined
+      const sql = mockedQuery.mock.calls[0][0] as string;
+      expect(sql).toContain("SELECT * FROM MATCH ANY SHORTEST PATH");
+      expect(sql).toContain("s.id = 1");
+      expect(sql).toContain("t.id = 5");
+    });
+
+    it("supports ALL SHORTEST selector", async () => {
+      mockedQuery.mockResolvedValueOnce({ columns: [], rows: [] });
+
+      await POST(
+        makeRequest({
+          action: "shortest_path",
+          database: "social",
+          sourceTable: "users",
+          sourceId: "1",
+          targetTable: "users",
+          targetId: "5",
+          selector: "all_shortest",
+        })
       );
+      const sql = mockedQuery.mock.calls[0][0] as string;
+      expect(sql).toContain("ALL SHORTEST PATH");
+    });
+
+    it("supports SHORTEST K selector with k", async () => {
+      mockedQuery.mockResolvedValueOnce({ columns: [], rows: [] });
+
+      await POST(
+        makeRequest({
+          action: "shortest_path",
+          database: "social",
+          sourceTable: "users",
+          sourceId: "1",
+          targetTable: "users",
+          targetId: "5",
+          selector: "shortest_k",
+          k: 3,
+        })
+      );
+      const sql = mockedQuery.mock.calls[0][0] as string;
+      expect(sql).toContain("SHORTEST 3 PATH");
+    });
+
+    it("rejects shortest_k without a positive k value", async () => {
+      const res = await POST(
+        makeRequest({
+          action: "shortest_path",
+          database: "social",
+          sourceTable: "users",
+          sourceId: "1",
+          targetTable: "users",
+          targetId: "5",
+          selector: "shortest_k",
+        })
+      );
+      expect(res.status).toBe(400);
+      const body = await parseResponse(res);
+      expect(body.error).toContain("k");
+    });
+
+    it("rejects an invalid selector value", async () => {
+      const res = await POST(
+        makeRequest({
+          action: "shortest_path",
+          database: "social",
+          sourceTable: "users",
+          sourceId: "1",
+          targetTable: "users",
+          targetId: "5",
+          selector: "bogus",
+        })
+      );
+      expect(res.status).toBe(400);
+      const body = await parseResponse(res);
+      expect(body.error).toContain("selector");
+    });
+  });
+
+  describe("variable_length_traverse action", () => {
+    it("returns 400 when table is missing", async () => {
+      const res = await POST(
+        makeRequest({
+          action: "variable_length_traverse",
+          database: "test",
+          id: "1",
+          minDepth: 1,
+          maxDepth: 3,
+        })
+      );
+      expect(res.status).toBe(400);
+    });
+
+    it("rejects negative depth values", async () => {
+      const res = await POST(
+        makeRequest({
+          action: "variable_length_traverse",
+          database: "test",
+          table: "users",
+          id: "1",
+          minDepth: -1,
+          maxDepth: 3,
+        })
+      );
+      expect(res.status).toBe(400);
+    });
+
+    it("rejects maxDepth < minDepth", async () => {
+      const res = await POST(
+        makeRequest({
+          action: "variable_length_traverse",
+          database: "test",
+          table: "users",
+          id: "1",
+          minDepth: 5,
+          maxDepth: 2,
+        })
+      );
+      expect(res.status).toBe(400);
+      const body = await parseResponse(res);
+      expect(body.error).toContain("maxDepth");
+    });
+
+    it("emits a hop quantifier in the MATCH SQL", async () => {
+      mockedQuery.mockResolvedValueOnce({ columns: [], rows: [] });
+
+      await POST(
+        makeRequest({
+          action: "variable_length_traverse",
+          database: "social",
+          table: "users",
+          id: "1",
+          direction: "out",
+          edgeType: "follows",
+          minDepth: 2,
+          maxDepth: 4,
+        })
+      );
+      const sql = mockedQuery.mock.calls[0][0] as string;
+      expect(sql).toContain("FROM MATCH");
+      expect(sql).toContain("*2..4");
+      expect(sql).toContain(":follows");
+      // direction "out" should produce -[...]->
+      expect(sql).toMatch(/-\[[^\]]+\]->/);
+    });
+
+    it("uses default min=1 max=3 when omitted", async () => {
+      mockedQuery.mockResolvedValueOnce({ columns: [], rows: [] });
+
+      await POST(
+        makeRequest({
+          action: "variable_length_traverse",
+          database: "social",
+          table: "users",
+          id: "1",
+        })
+      );
+      const sql = mockedQuery.mock.calls[0][0] as string;
+      expect(sql).toContain("*1..3");
     });
   });
 
