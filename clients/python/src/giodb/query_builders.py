@@ -299,3 +299,260 @@ def build_shortest_path(
         return {"text": inner_sql, "values": values}
 
     return {"text": f"SELECT {select} FROM {inner_sql}", "values": values}
+
+
+# ---------------------------------------------------------------------------
+# Graph algorithm query builders (GDB-491)
+#
+# Each builder generates a SELECT against a table-valued function (TVF) for
+# the corresponding graph algorithm. The edge type is bound as a query
+# parameter ($1) and any additional algorithm parameters follow ($2, $3, ...).
+# Generated SQL has the shape:
+#
+#     SELECT <select> FROM <algorithm>($1, $2, ...)
+#
+# Callers can JOIN the result against other tables using composable SQL
+# (e.g. ``SELECT u.name, p.score FROM pagerank('knows') p JOIN users u
+# ON u.id = p.node_id``) — the builder produces the right-hand side of any
+# such JOIN.
+# ---------------------------------------------------------------------------
+
+
+_VALID_DEGREE_DIRECTIONS = {"IN", "OUT", "BOTH"}
+_VALID_CLOSENESS_VARIANTS = {"STANDARD", "WASSERMAN_FAUST", "HARMONIC"}
+
+
+def _validate_non_empty_str(value: Any, name: str) -> None:
+    """Validate that a value is a non-empty string."""
+    if not isinstance(value, str):
+        raise ValueError(f"{name} must be a string, got {type(value).__name__}")
+    if not value:
+        raise ValueError(f"{name} must be a non-empty string")
+
+
+def _validate_probability(value: Any, name: str) -> None:
+    """Validate that a value is a float in the open interval (0, 1)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{name} must be a number, got {type(value).__name__}")
+    if not (0.0 < float(value) < 1.0):
+        raise ValueError(f"{name} must be between 0 and 1 (exclusive), got {value}")
+
+
+def _validate_positive_number(value: Any, name: str) -> None:
+    """Validate that a value is a positive (>0) number."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{name} must be a number, got {type(value).__name__}")
+    if float(value) <= 0.0:
+        raise ValueError(f"{name} must be positive, got {value}")
+
+
+def _algorithm_sql(
+    func_name: str,
+    values: list[Any],
+    *,
+    select: str = "*",
+) -> dict[str, Any]:
+    """Construct the standard ``SELECT <select> FROM <func>($1, $2, ...)`` SQL."""
+    placeholders = ", ".join(f"${i + 1}" for i in range(len(values)))
+    text = f"SELECT {select} FROM {func_name}({placeholders})"
+    return {"text": text, "values": values}
+
+
+def build_pagerank(
+    edge_type: str,
+    damping: float = 0.85,
+    iterations: int = 20,
+    *,
+    select: str = "*",
+) -> dict[str, Any]:
+    """Build a PageRank query.
+
+    SQL: ``SELECT <select> FROM pagerank($1, $2, $3)`` with arguments
+    ``(edge_type, damping, iterations)``.
+    """
+    _validate_non_empty_str(edge_type, "edge_type")
+    _validate_probability(damping, "damping")
+    _validate_positive_int(iterations, "iterations")
+    return _algorithm_sql(
+        "pagerank",
+        [edge_type, float(damping), iterations],
+        select=select,
+    )
+
+
+def build_betweenness_centrality(
+    edge_type: str,
+    *,
+    select: str = "*",
+) -> dict[str, Any]:
+    """Build a betweenness centrality query.
+
+    SQL: ``SELECT <select> FROM betweenness_centrality($1)``.
+    """
+    _validate_non_empty_str(edge_type, "edge_type")
+    return _algorithm_sql("betweenness_centrality", [edge_type], select=select)
+
+
+def build_connected_components(
+    edge_type: str,
+    *,
+    select: str = "*",
+) -> dict[str, Any]:
+    """Build a connected components query.
+
+    SQL: ``SELECT <select> FROM connected_components($1)``.
+    """
+    _validate_non_empty_str(edge_type, "edge_type")
+    return _algorithm_sql("connected_components", [edge_type], select=select)
+
+
+def build_louvain(
+    edge_type: str,
+    resolution: float = 1.0,
+    *,
+    select: str = "*",
+) -> dict[str, Any]:
+    """Build a Louvain community detection query.
+
+    SQL: ``SELECT <select> FROM louvain($1, $2)`` with arguments
+    ``(edge_type, resolution)``.
+    """
+    _validate_non_empty_str(edge_type, "edge_type")
+    _validate_positive_number(resolution, "resolution")
+    return _algorithm_sql(
+        "louvain",
+        [edge_type, float(resolution)],
+        select=select,
+    )
+
+
+def build_degree_centrality(
+    edge_type: str,
+    direction: str = "BOTH",
+    *,
+    select: str = "*",
+) -> dict[str, Any]:
+    """Build a degree centrality query.
+
+    SQL: ``SELECT <select> FROM degree_centrality($1, $2)`` with arguments
+    ``(edge_type, direction)``. ``direction`` must be one of ``IN``, ``OUT``,
+    or ``BOTH`` (case-insensitive).
+    """
+    _validate_non_empty_str(edge_type, "edge_type")
+    _validate_non_empty_str(direction, "direction")
+    direction_upper = direction.upper()
+    if direction_upper not in _VALID_DEGREE_DIRECTIONS:
+        raise ValueError(
+            f"direction must be one of {sorted(_VALID_DEGREE_DIRECTIONS)}, "
+            f"got {direction!r}"
+        )
+    return _algorithm_sql(
+        "degree_centrality",
+        [edge_type, direction_upper],
+        select=select,
+    )
+
+
+def build_closeness_centrality(
+    edge_type: str,
+    variant: str = "STANDARD",
+    *,
+    select: str = "*",
+) -> dict[str, Any]:
+    """Build a closeness centrality query.
+
+    SQL: ``SELECT <select> FROM closeness_centrality($1, $2)`` with arguments
+    ``(edge_type, variant)``. ``variant`` must be one of ``STANDARD``,
+    ``WASSERMAN_FAUST``, or ``HARMONIC`` (case-insensitive).
+    """
+    _validate_non_empty_str(edge_type, "edge_type")
+    _validate_non_empty_str(variant, "variant")
+    variant_upper = variant.upper()
+    if variant_upper not in _VALID_CLOSENESS_VARIANTS:
+        raise ValueError(
+            f"variant must be one of {sorted(_VALID_CLOSENESS_VARIANTS)}, "
+            f"got {variant!r}"
+        )
+    return _algorithm_sql(
+        "closeness_centrality",
+        [edge_type, variant_upper],
+        select=select,
+    )
+
+
+def build_eigenvector_centrality(
+    edge_type: str,
+    iterations: int = 100,
+    tolerance: float = 1e-6,
+    *,
+    select: str = "*",
+) -> dict[str, Any]:
+    """Build an eigenvector centrality query.
+
+    SQL: ``SELECT <select> FROM eigenvector_centrality($1, $2, $3)`` with
+    arguments ``(edge_type, iterations, tolerance)``.
+    """
+    _validate_non_empty_str(edge_type, "edge_type")
+    _validate_positive_int(iterations, "iterations")
+    _validate_positive_number(tolerance, "tolerance")
+    return _algorithm_sql(
+        "eigenvector_centrality",
+        [edge_type, iterations, float(tolerance)],
+        select=select,
+    )
+
+
+def build_harmonic_centrality(
+    edge_type: str,
+    *,
+    select: str = "*",
+) -> dict[str, Any]:
+    """Build a harmonic centrality query.
+
+    SQL: ``SELECT <select> FROM harmonic_centrality($1)``.
+    """
+    _validate_non_empty_str(edge_type, "edge_type")
+    return _algorithm_sql("harmonic_centrality", [edge_type], select=select)
+
+
+def build_clustering_coefficient(
+    edge_type: str,
+    *,
+    select: str = "*",
+) -> dict[str, Any]:
+    """Build a clustering coefficient query.
+
+    SQL: ``SELECT <select> FROM clustering_coefficient($1)``.
+    """
+    _validate_non_empty_str(edge_type, "edge_type")
+    return _algorithm_sql("clustering_coefficient", [edge_type], select=select)
+
+
+def build_triangle_count(
+    edge_type: str,
+    *,
+    select: str = "*",
+) -> dict[str, Any]:
+    """Build a triangle count query.
+
+    SQL: ``SELECT <select> FROM triangle_count($1)``.
+    """
+    _validate_non_empty_str(edge_type, "edge_type")
+    return _algorithm_sql("triangle_count", [edge_type], select=select)
+
+
+def build_strongly_connected_components(
+    edge_type: str,
+    *,
+    select: str = "*",
+) -> dict[str, Any]:
+    """Build a strongly connected components query.
+
+    SQL: ``SELECT <select> FROM strongly_connected_components($1)``.
+    """
+    _validate_non_empty_str(edge_type, "edge_type")
+    return _algorithm_sql(
+        "strongly_connected_components",
+        [edge_type],
+        select=select,
+    )

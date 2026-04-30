@@ -45,12 +45,23 @@ from .helpers import (
 )
 from .pool import Pool, PoolClient
 from .query_builders import (
+    build_betweenness_centrality,
+    build_closeness_centrality,
+    build_clustering_coefficient,
+    build_connected_components,
+    build_degree_centrality,
+    build_eigenvector_centrality,
+    build_harmonic_centrality,
     build_link,
+    build_louvain,
     build_match,
     build_nearest,
+    build_pagerank,
     build_shortest_match,
     build_shortest_path,
+    build_strongly_connected_components,
     build_traverse,
+    build_triangle_count,
     build_unlink,
     escape_identifier,
 )
@@ -148,6 +159,18 @@ __all__ = [
     "build_match",
     "build_shortest_match",
     "build_shortest_path",
+    # Graph algorithm query builders
+    "build_pagerank",
+    "build_betweenness_centrality",
+    "build_connected_components",
+    "build_louvain",
+    "build_degree_centrality",
+    "build_closeness_centrality",
+    "build_eigenvector_centrality",
+    "build_harmonic_centrality",
+    "build_clustering_coefficient",
+    "build_triangle_count",
+    "build_strongly_connected_components",
     "escape_identifier",
     # Helpers
     "show_databases_sql",
