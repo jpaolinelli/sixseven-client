@@ -9,8 +9,9 @@
  *   - Each identifier max 64 chars; max 1000 entries per array
  *   - Identifiers double-quoted with internal `"` doubled (defense in depth)
  *
- * Plus a known-bug test for buildShortestPath which still raw-interpolates
- * options.select (out of scope for GDB-665 fix; tracked as follow-up).
+ * Plus regression coverage for buildShortestPath, which historically
+ * raw-interpolated options.select (closed in GDB-670 by routing through the
+ * same renderSelect allowlist).
  */
 import { describe, it, expect } from 'vitest';
 import {
@@ -538,21 +539,201 @@ describe('GDB-665 — defense in depth: quote escaping', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 15. KNOWN BUG — buildShortestPath still raw-interpolates select
+// 15. GDB-670 — buildShortestPath select goes through renderSelect
+//
+// Historically buildShortestPath raw-interpolated options.select, leaving the
+// same SQL-injection class GDB-665 closed for the algorithm builders open in
+// the SHORTEST PATH builder. GDB-670 routes it through renderSelect; this
+// section is the regression that locks the fix in.
 // ---------------------------------------------------------------------------
 
-describe('KNOWN BUG (out of scope, follow-up filed) — buildShortestPath select injection', () => {
-  it('buildShortestPath raw-interpolates options.select (vulnerable)', () => {
-    const q = buildShortestPath('knows', 'users', 1, 'users', 2, {
-      select: '*; DROP TABLE users; --' as never,
+describe('GDB-670 — buildShortestPath routes select through renderSelect', () => {
+  // Mirror the algorithm-builder injection payloads.
+  const PAYLOADS = [
+    '*; DROP TABLE users;--',
+    "1; DROP TABLE users; --",
+    "* FROM users; --",
+    "(SELECT password FROM users)",
+    "col1, col2; DELETE FROM nodes",
+    "* UNION SELECT password FROM users --",
+    "col, (SELECT pg_sleep(10))",
+    'col1, col2', // raw projection string — the original GDB-477 escape hatch
+    'path_length, nodes',
+    'col/*comment*/',
+    '"; DROP TABLE users; --',
+  ];
+
+  for (const payload of PAYLOADS) {
+    it(`rejects raw injection string ${JSON.stringify(payload)}`, () => {
+      expect(() =>
+        buildShortestPath('knows', 'users', 1, 'users', 2, {
+          select: payload as never,
+        }),
+      ).toThrow(TypeError);
     });
-    // Documents the bug: the malicious string appears verbatim in the SQL.
-    // When the fix lands, this test should be UPDATED to expect a throw.
-    expect(q.text).toContain('DROP TABLE users');
+
+    it(`rejects injection inside an array entry ${JSON.stringify(payload)}`, () => {
+      expect(() =>
+        buildShortestPath('knows', 'users', 1, 'users', 2, {
+          select: [payload],
+        }),
+      ).toThrow();
+    });
+
+    it(`rejects injection in second array entry ${JSON.stringify(payload)}`, () => {
+      expect(() =>
+        buildShortestPath('knows', 'users', 1, 'users', 2, {
+          select: ['node_id', payload],
+        }),
+      ).toThrow();
+    });
+  }
+
+  it('rejects empty string select', () => {
+    expect(() =>
+      buildShortestPath('knows', 'users', 1, 'users', 2, {
+        select: '' as never,
+      }),
+    ).toThrow(TypeError);
   });
 
-  it('buildShortestPath defaults select to "*" when omitted (regression of intended default)', () => {
+  it('rejects whitespace-only string select', () => {
+    expect(() =>
+      buildShortestPath('knows', 'users', 1, 'users', 2, {
+        select: ' ' as never,
+      }),
+    ).toThrow(TypeError);
+  });
+
+  it('rejects "**"', () => {
+    expect(() =>
+      buildShortestPath('knows', 'users', 1, 'users', 2, {
+        select: '**' as never,
+      }),
+    ).toThrow(TypeError);
+  });
+
+  it('rejects empty array', () => {
+    expect(() =>
+      buildShortestPath('knows', 'users', 1, 'users', 2, { select: [] }),
+    ).toThrow(TypeError);
+  });
+
+  it('accepts the literal "*"', () => {
+    const q = buildShortestPath('knows', 'users', 1, 'users', 2, {
+      select: '*',
+    });
+    expect(q.text).toBe(
+      'SELECT * FROM SHORTEST PATH FROM "users"($1) TO "users"($2) VIA "knows"',
+    );
+  });
+
+  it('treats undefined select as default "*"', () => {
+    const q = buildShortestPath('knows', 'users', 1, 'users', 2, {
+      select: undefined,
+    });
+    expect(q.text.startsWith('SELECT * FROM SHORTEST PATH ')).toBe(true);
+  });
+
+  it('treats null select as default "*"', () => {
+    const q = buildShortestPath('knows', 'users', 1, 'users', 2, {
+      select: null,
+    });
+    expect(q.text.startsWith('SELECT * FROM SHORTEST PATH ')).toBe(true);
+  });
+
+  it('treats omitted select as default "*"', () => {
     const q = buildShortestPath('knows', 'users', 1, 'users', 2);
     expect(q.text.startsWith('SELECT * FROM SHORTEST PATH ')).toBe(true);
+  });
+
+  it('accepts an identifier array and double-quotes each entry', () => {
+    const q = buildShortestPath('knows', 'users', 1, 'users', 2, {
+      select: ['path_length', 'nodes'],
+    });
+    expect(q.text).toBe(
+      'SELECT "path_length", "nodes" FROM SHORTEST PATH FROM "users"($1) TO "users"($2) VIA "knows"',
+    );
+  });
+
+  it('preserves identifier order and does not deduplicate', () => {
+    const q = buildShortestPath('knows', 'users', 1, 'users', 2, {
+      select: ['z', 'a', 'a'],
+    });
+    expect(q.text.startsWith('SELECT "z", "a", "a" FROM SHORTEST PATH ')).toBe(
+      true,
+    );
+  });
+
+  it('rejects a 65-character identifier (GDB-666 length cap)', () => {
+    expect(() =>
+      buildShortestPath('knows', 'users', 1, 'users', 2, {
+        select: ['a'.repeat(65)],
+      }),
+    ).toThrow(RangeError);
+  });
+
+  it('accepts a 64-character identifier (GDB-666 boundary)', () => {
+    const id = 'a'.repeat(64);
+    const q = buildShortestPath('knows', 'users', 1, 'users', 2, {
+      select: [id],
+    });
+    expect(q.text).toContain(`"${id}"`);
+  });
+
+  it('rejects 1001 entries (GDB-666 array cap)', () => {
+    const arr = Array.from({ length: 1001 }, (_, i) => `c${i}`);
+    expect(() =>
+      buildShortestPath('knows', 'users', 1, 'users', 2, { select: arr }),
+    ).toThrow(RangeError);
+  });
+
+  it('rejects Unicode lookalike identifier', () => {
+    expect(() =>
+      buildShortestPath('knows', 'users', 1, 'users', 2, {
+        select: ['Аdmin'], // Cyrillic A
+      }),
+    ).toThrow(TypeError);
+  });
+
+  it('rejects non-Array iterable (Set)', () => {
+    expect(() =>
+      buildShortestPath('knows', 'users', 1, 'users', 2, {
+        select: new Set(['col1', 'col2']) as never,
+      }),
+    ).toThrow(TypeError);
+  });
+
+  it('rejects null in array', () => {
+    expect(() =>
+      buildShortestPath('knows', 'users', 1, 'users', 2, {
+        select: ['col', null] as never,
+      }),
+    ).toThrow(TypeError);
+  });
+
+  it('rejects trailing newline (GDB-669 lesson)', () => {
+    expect(() =>
+      buildShortestPath('knows', 'users', 1, 'users', 2, {
+        select: ['col\n'],
+      }),
+    ).toThrow(TypeError);
+  });
+
+  it('legacySyntax=true bypasses SELECT wrapping entirely (no projection rendered)', () => {
+    // When legacySyntax is requested the builder emits bare SHORTEST PATH —
+    // there is no SELECT to inject into, so select is ignored. Verify no
+    // throw and no SELECT in the output.
+    const q = buildShortestPath('knows', 'users', 1, 'users', 2, {
+      legacySyntax: true,
+      // Even an obviously malicious string should be ignored in this branch
+      // because the builder never reaches renderSelect.
+      select: '*; DROP TABLE users; --' as never,
+    });
+    expect(q.text).toBe(
+      'SHORTEST PATH FROM "users"($1) TO "users"($2) VIA "knows"',
+    );
+    expect(q.text).not.toContain('SELECT');
+    expect(q.text).not.toContain('DROP');
   });
 });

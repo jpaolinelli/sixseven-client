@@ -430,16 +430,27 @@ describe('QA buildShortestPath — boundary and edge cases', () => {
     expect(q.text).toMatch(/^SELECT \* FROM SHORTEST PATH/);
   });
 
-  it('should use custom select clause', () => {
+  it('should use custom select clause as identifier array (GDB-670)', () => {
+    // GDB-670: select is now SelectClause = '*' | readonly string[]. Raw
+    // function-call strings like "count(*)" are rejected — callers compose
+    // aggregates server-side in the outer query.
     const q = buildShortestPath('edge', 'from_table', 1, 'to_table', 2, {
-      select: 'count(*)',
+      select: ['path_length'],
     });
-    expect(q.text).toMatch(/^SELECT count\(\*\) FROM SHORTEST PATH/);
+    expect(q.text).toMatch(/^SELECT "path_length" FROM SHORTEST PATH/);
+  });
+
+  it('should reject raw function-call select string (GDB-670)', () => {
+    expect(() =>
+      buildShortestPath('edge', 'from_table', 1, 'to_table', 2, {
+        select: 'count(*)' as never,
+      }),
+    ).toThrow(TypeError);
   });
 
   it('should ignore select when legacySyntax is true', () => {
     const q = buildShortestPath('edge', 'from_table', 1, 'to_table', 2, {
-      select: 'path_length',
+      select: ['path_length'],
       legacySyntax: true,
     });
     expect(q.text).not.toContain('SELECT');
@@ -794,11 +805,13 @@ describe('QA AC verification — SHORTEST PATH SELECT composability (AC #4)', ()
     expect(q.text).toMatch(/^SELECT \* FROM SHORTEST PATH/);
   });
 
-  it('should support custom SELECT clause', () => {
+  it('should support custom SELECT clause as identifier array (GDB-670)', () => {
     const q = buildShortestPath('follows', 'users', 1, 'users', 2, {
-      select: 'path_length, nodes',
+      select: ['path_length', 'nodes'],
     });
-    expect(q.text).toMatch(/^SELECT path_length, nodes FROM SHORTEST PATH/);
+    expect(q.text).toMatch(
+      /^SELECT "path_length", "nodes" FROM SHORTEST PATH/,
+    );
   });
 });
 

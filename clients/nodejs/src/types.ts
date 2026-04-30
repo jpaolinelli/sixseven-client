@@ -67,10 +67,28 @@ export interface WithinTraverseOptions {
   maxDepth?: number;
 }
 
+/**
+ * Public type for SELECT projection parameters in graph algorithm and graph
+ * traversal builders.
+ *
+ * Either the literal `"*"` (the default — all columns) or an array of column
+ * identifier strings. Each identifier must match `^[A-Za-z_][A-Za-z0-9_]*$`.
+ *
+ * Raw projection strings (e.g. `"col1, col2"`) are intentionally rejected to
+ * eliminate the SQL injection class closed by GDB-665 / GDB-670.
+ */
+export type SelectClause = '*' | readonly string[];
+
 export interface ShortestPathOptions {
   direction?: TraverseDirection;
   maxDepth?: number;
-  select?: string;
+  /**
+   * Projection. Either the literal `"*"` (default — all columns) or an array
+   * of column identifiers matching `^[A-Za-z_][A-Za-z0-9_]*$`. Raw projection
+   * strings (e.g. `"col1, col2"`) are rejected to prevent SQL injection
+   * (GDB-670).
+   */
+  select?: SelectClause | null;
   legacySyntax?: boolean;
 }
 
