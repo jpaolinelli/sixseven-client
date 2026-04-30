@@ -30,9 +30,16 @@ describe('buildPagerank', () => {
     expect(q.values).toEqual(['follows', 0.5, 50]);
   });
 
-  it('respects a custom select projection', () => {
-    const q = buildPagerank('knows', { select: 'node_id, score' });
-    expect(q.text).toBe('SELECT node_id, score FROM pagerank($1, $2, $3)');
+  it('respects a custom select projection (array of identifiers)', () => {
+    const q = buildPagerank('knows', { select: ['node_id', 'score'] });
+    expect(q.text).toBe(
+      'SELECT "node_id", "score" FROM pagerank($1, $2, $3)',
+    );
+  });
+
+  it('accepts the literal "*" select', () => {
+    const q = buildPagerank('knows', { select: '*' });
+    expect(q.text).toBe('SELECT * FROM pagerank($1, $2, $3)');
   });
 
   it('rejects empty edge type', () => {
@@ -85,30 +92,32 @@ describe('buildPagerank', () => {
 
   it('rejects select containing a semicolon (SQL injection attempt)', () => {
     expect(() =>
-      buildPagerank('knows', { select: '*; DROP TABLE users; --' }),
-    ).toThrow(/disallowed SQL/);
+      buildPagerank('knows', {
+        select: '*; DROP TABLE users; --' as unknown as '*',
+      }),
+    ).toThrow(TypeError);
   });
 
-  it('rejects select containing a SQL line comment', () => {
-    expect(() => buildPagerank('knows', { select: '* -- haha' })).toThrow(
-      /disallowed SQL/,
-    );
+  it('rejects raw projection string with comma-separated columns', () => {
+    expect(() =>
+      buildPagerank('knows', { select: 'node_id, score' as unknown as '*' }),
+    ).toThrow(TypeError);
   });
 
-  it('rejects select containing a block comment', () => {
-    expect(() => buildPagerank('knows', { select: '/* x */ *' })).toThrow(
-      /disallowed SQL/,
-    );
+  it('rejects empty select array', () => {
+    expect(() => buildPagerank('knows', { select: [] })).toThrow(TypeError);
   });
 
-  it('rejects empty select', () => {
-    expect(() => buildPagerank('knows', { select: '' })).toThrow(/select/);
+  it('rejects array element with invalid identifier characters', () => {
+    expect(() =>
+      buildPagerank('knows', { select: ['node_id; DROP'] }),
+    ).toThrow(TypeError);
   });
 
-  it('rejects select containing a null byte', () => {
-    expect(() => buildPagerank('knows', { select: '*\0' })).toThrow(
-      /disallowed SQL/,
-    );
+  it('rejects array element with whitespace', () => {
+    expect(() =>
+      buildPagerank('knows', { select: ['node id'] }),
+    ).toThrow(TypeError);
   });
 });
 
@@ -123,12 +132,12 @@ describe('buildBetweennessCentrality', () => {
     expect(q.values).toEqual(['knows']);
   });
 
-  it('respects custom select', () => {
+  it('respects custom select (array of identifiers)', () => {
     const q = buildBetweennessCentrality('knows', {
-      select: 'node_id, score',
+      select: ['node_id', 'score'],
     });
     expect(q.text).toBe(
-      'SELECT node_id, score FROM betweenness_centrality($1)',
+      'SELECT "node_id", "score" FROM betweenness_centrality($1)',
     );
   });
 
@@ -341,12 +350,12 @@ describe('buildClusteringCoefficient', () => {
     expect(q.values).toEqual(['knows']);
   });
 
-  it('respects custom select', () => {
+  it('respects custom select (array of identifiers)', () => {
     const q = buildClusteringCoefficient('knows', {
-      select: 'node_id, coefficient',
+      select: ['node_id', 'coefficient'],
     });
     expect(q.text).toBe(
-      'SELECT node_id, coefficient FROM clustering_coefficient($1)',
+      'SELECT "node_id", "coefficient" FROM clustering_coefficient($1)',
     );
   });
 

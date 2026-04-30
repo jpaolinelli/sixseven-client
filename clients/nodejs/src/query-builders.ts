@@ -92,32 +92,97 @@ function assertPositiveNumber(value: unknown, name: string): asserts value is nu
 }
 
 /**
- * Validate a user-provided SELECT projection clause.
+ * Public type for algorithm builder `select` parameters.
  *
- * SELECT clauses cannot be parameterized — the value is interpolated directly
- * into the SQL. To avoid trivial injection (terminating the query, smuggling a
- * second statement, comments, etc.), reject any string containing semicolons,
- * SQL comment sequences, or null bytes. Callers needing complex projections
- * should compose them outside the builder.
+ * Either the literal `"*"` (the default — all columns) or an array of column
+ * identifier strings. Each identifier must match `^[A-Za-z_][A-Za-z0-9_]*$`.
  */
-function assertSafeSelect(value: unknown, name: string): asserts value is string {
-  if (typeof value !== 'string') {
-    throw new TypeError(`${name} must be a string, got ${typeof value}`);
+export type SelectClause = '*' | readonly string[];
+
+// Maximum identifier length (matches PostgreSQL's NAMEDATALEN convention).
+const MAX_SELECT_IDENTIFIER_LENGTH = 64;
+// Maximum number of columns in a single select array.
+const MAX_SELECT_IDENTIFIER_COUNT = 1000;
+// Anchored allowlist regex. JavaScript's `$` (without the `m` flag) matches
+// the very end of string, so `\n` at the end is correctly rejected — this is
+// equivalent to Python's `re.fullmatch`. (See GDB-669 lesson.)
+const SELECT_IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * Validate a user-provided SELECT projection.
+ *
+ * SELECT clauses cannot be parameterized — the projection is interpolated
+ * directly into SQL. To eliminate the risk of injection, only two shapes are
+ * accepted:
+ *
+ *   1. The literal string `"*"` (selects all columns).
+ *   2. A non-empty array of column identifiers, each matching the allowlist
+ *      regex `^[A-Za-z_][A-Za-z0-9_]*$` (ASCII letter/underscore start; ASCII
+ *      letters, digits, underscores thereafter).
+ *
+ * Returns the rendered SQL fragment to splice into `SELECT ... FROM`.
+ *
+ * Each identifier is also length-capped at 64 characters (PostgreSQL
+ * NAMEDATALEN convention) and the array is capped at 1000 entries (GDB-666).
+ */
+function renderSelect(value: unknown, name: string): string {
+  // Accept the literal "*" (the documented default).
+  if (value === '*') {
+    return '*';
   }
-  if (value.trim().length === 0) {
-    throw new TypeError(`${name} must be a non-empty string`);
-  }
-  if (
-    value.includes(';') ||
-    value.includes('--') ||
-    value.includes('/*') ||
-    value.includes('*/') ||
-    value.includes('\0')
-  ) {
+
+  // Reject all other strings — including raw projection strings like
+  // "col1, col2", "*", with surrounding whitespace, etc. This is what closes
+  // the GDB-665 SQL injection: there is no string-shaped escape hatch.
+  if (typeof value === 'string') {
     throw new TypeError(
-      `${name} contains disallowed SQL characters (\";\", \"--\", \"/*\", \"*/\", null byte)`,
+      `${name} must be the string "*" or an array of column identifiers, got string ${JSON.stringify(value)}`,
     );
   }
+
+  if (!Array.isArray(value)) {
+    throw new TypeError(
+      `${name} must be the string "*" or an array of column identifiers, got ${typeof value}`,
+    );
+  }
+
+  if (value.length === 0) {
+    throw new TypeError(`${name} must contain at least one column identifier`);
+  }
+
+  if (value.length > MAX_SELECT_IDENTIFIER_COUNT) {
+    throw new RangeError(
+      `${name} has ${value.length} entries; maximum is ${MAX_SELECT_IDENTIFIER_COUNT}`,
+    );
+  }
+
+  const rendered: string[] = [];
+  for (let i = 0; i < value.length; i++) {
+    const ident = value[i];
+    if (typeof ident !== 'string') {
+      throw new TypeError(
+        `${name}[${i}] must be a string, got ${typeof ident}`,
+      );
+    }
+    if (ident.length === 0) {
+      throw new TypeError(`${name}[${i}] must be a non-empty string`);
+    }
+    if (ident.length > MAX_SELECT_IDENTIFIER_LENGTH) {
+      throw new RangeError(
+        `${name}[${i}] is ${ident.length} characters; maximum is ${MAX_SELECT_IDENTIFIER_LENGTH}`,
+      );
+    }
+    if (!SELECT_IDENTIFIER_RE.test(ident)) {
+      throw new TypeError(
+        `${name}[${i}] is not a valid column identifier: ${JSON.stringify(ident)}`,
+      );
+    }
+    // The allowlist regex forbids `"`, but double-quote-escape anyway as
+    // defense in depth.
+    rendered.push('"' + ident.replace(/"/g, '""') + '"');
+  }
+
+  return rendered.join(', ');
 }
 
 export interface AlgorithmQuery {
@@ -128,11 +193,11 @@ export interface AlgorithmQuery {
 function buildAlgorithmSql(
   funcName: string,
   values: unknown[],
-  select: string,
+  selectSql: string,
 ): AlgorithmQuery {
   const placeholders = values.map((_, i) => `$${i + 1}`).join(', ');
   return {
-    text: `SELECT ${select} FROM ${funcName}(${placeholders})`,
+    text: `SELECT ${selectSql} FROM ${funcName}(${placeholders})`,
     values,
   };
 }
@@ -461,8 +526,13 @@ export interface PagerankOptions {
   damping?: number;
   /** Power-iteration count. Defaults to 20. */
   iterations?: number;
-  /** Projection clause (validated against trivial SQL injection). */
-  select?: string;
+  /**
+   * Projection. Either the literal `"*"` (default — all columns) or an array
+   * of column identifiers matching `^[A-Za-z_][A-Za-z0-9_]*$`. Raw projection
+   * strings (e.g. `"col1, col2"`) are rejected to prevent SQL injection
+   * (GDB-665).
+   */
+  select?: SelectClause | null;
 }
 
 export interface PagerankRow {
@@ -474,12 +544,12 @@ export function buildPagerank(
   edgeType: string,
   options: PagerankOptions = {},
 ): AlgorithmQuery {
-  const { damping = 0.85, iterations = 20, select = '*' } = options;
+  const { damping = 0.85, iterations = 20, select } = options;
   assertNonEmptyString(edgeType, 'edgeType');
   assertProbability(damping, 'damping');
   assertPositiveInt(iterations, 'iterations');
-  assertSafeSelect(select, 'select');
-  return buildAlgorithmSql('pagerank', [edgeType, damping, iterations], select);
+  const selectSql = renderSelect(select ?? '*', 'select');
+  return buildAlgorithmSql('pagerank', [edgeType, damping, iterations], selectSql);
 }
 
 export interface BetweennessCentralityRow {
@@ -489,12 +559,12 @@ export interface BetweennessCentralityRow {
 
 export function buildBetweennessCentrality(
   edgeType: string,
-  options: { select?: string } = {},
+  options: { select?: SelectClause | null } = {},
 ): AlgorithmQuery {
-  const { select = '*' } = options;
+  const { select } = options;
   assertNonEmptyString(edgeType, 'edgeType');
-  assertSafeSelect(select, 'select');
-  return buildAlgorithmSql('betweenness_centrality', [edgeType], select);
+  const selectSql = renderSelect(select ?? '*', 'select');
+  return buildAlgorithmSql('betweenness_centrality', [edgeType], selectSql);
 }
 
 export interface ConnectedComponentsRow {
@@ -504,18 +574,18 @@ export interface ConnectedComponentsRow {
 
 export function buildConnectedComponents(
   edgeType: string,
-  options: { select?: string } = {},
+  options: { select?: SelectClause | null } = {},
 ): AlgorithmQuery {
-  const { select = '*' } = options;
+  const { select } = options;
   assertNonEmptyString(edgeType, 'edgeType');
-  assertSafeSelect(select, 'select');
-  return buildAlgorithmSql('connected_components', [edgeType], select);
+  const selectSql = renderSelect(select ?? '*', 'select');
+  return buildAlgorithmSql('connected_components', [edgeType], selectSql);
 }
 
 export interface LouvainOptions {
   /** Resolution parameter; >0. Defaults to 1.0. */
   resolution?: number;
-  select?: string;
+  select?: SelectClause | null;
 }
 
 export interface LouvainRow {
@@ -527,17 +597,17 @@ export function buildLouvain(
   edgeType: string,
   options: LouvainOptions = {},
 ): AlgorithmQuery {
-  const { resolution = 1.0, select = '*' } = options;
+  const { resolution = 1.0, select } = options;
   assertNonEmptyString(edgeType, 'edgeType');
   assertPositiveNumber(resolution, 'resolution');
-  assertSafeSelect(select, 'select');
-  return buildAlgorithmSql('louvain', [edgeType, resolution], select);
+  const selectSql = renderSelect(select ?? '*', 'select');
+  return buildAlgorithmSql('louvain', [edgeType, resolution], selectSql);
 }
 
 export interface DegreeCentralityOptions {
   /** Edge direction to count. Defaults to 'BOTH'. */
   direction?: DegreeDirection | Lowercase<DegreeDirection>;
-  select?: string;
+  select?: SelectClause | null;
 }
 
 export interface DegreeCentralityRow {
@@ -549,7 +619,7 @@ export function buildDegreeCentrality(
   edgeType: string,
   options: DegreeCentralityOptions = {},
 ): AlgorithmQuery {
-  const { direction = 'BOTH', select = '*' } = options;
+  const { direction = 'BOTH', select } = options;
   assertNonEmptyString(edgeType, 'edgeType');
   assertNonEmptyString(direction, 'direction');
   const upper = direction.toUpperCase() as DegreeDirection;
@@ -558,14 +628,14 @@ export function buildDegreeCentrality(
       `direction must be one of ${VALID_DEGREE_DIRECTIONS.join(', ')}, got ${direction}`,
     );
   }
-  assertSafeSelect(select, 'select');
-  return buildAlgorithmSql('degree_centrality', [edgeType, upper], select);
+  const selectSql = renderSelect(select ?? '*', 'select');
+  return buildAlgorithmSql('degree_centrality', [edgeType, upper], selectSql);
 }
 
 export interface ClosenessCentralityOptions {
   /** Closeness variant. Defaults to 'STANDARD'. */
   variant?: ClosenessVariant | Lowercase<ClosenessVariant>;
-  select?: string;
+  select?: SelectClause | null;
 }
 
 export interface ClosenessCentralityRow {
@@ -577,7 +647,7 @@ export function buildClosenessCentrality(
   edgeType: string,
   options: ClosenessCentralityOptions = {},
 ): AlgorithmQuery {
-  const { variant = 'STANDARD', select = '*' } = options;
+  const { variant = 'STANDARD', select } = options;
   assertNonEmptyString(edgeType, 'edgeType');
   assertNonEmptyString(variant, 'variant');
   const upper = variant.toUpperCase() as ClosenessVariant;
@@ -586,8 +656,8 @@ export function buildClosenessCentrality(
       `variant must be one of ${VALID_CLOSENESS_VARIANTS.join(', ')}, got ${variant}`,
     );
   }
-  assertSafeSelect(select, 'select');
-  return buildAlgorithmSql('closeness_centrality', [edgeType, upper], select);
+  const selectSql = renderSelect(select ?? '*', 'select');
+  return buildAlgorithmSql('closeness_centrality', [edgeType, upper], selectSql);
 }
 
 export interface EigenvectorCentralityOptions {
@@ -595,7 +665,7 @@ export interface EigenvectorCentralityOptions {
   iterations?: number;
   /** Convergence tolerance; >0. Defaults to 1e-6. */
   tolerance?: number;
-  select?: string;
+  select?: SelectClause | null;
 }
 
 export interface EigenvectorCentralityRow {
@@ -607,15 +677,15 @@ export function buildEigenvectorCentrality(
   edgeType: string,
   options: EigenvectorCentralityOptions = {},
 ): AlgorithmQuery {
-  const { iterations = 100, tolerance = 1e-6, select = '*' } = options;
+  const { iterations = 100, tolerance = 1e-6, select } = options;
   assertNonEmptyString(edgeType, 'edgeType');
   assertPositiveInt(iterations, 'iterations');
   assertPositiveNumber(tolerance, 'tolerance');
-  assertSafeSelect(select, 'select');
+  const selectSql = renderSelect(select ?? '*', 'select');
   return buildAlgorithmSql(
     'eigenvector_centrality',
     [edgeType, iterations, tolerance],
-    select,
+    selectSql,
   );
 }
 
@@ -626,12 +696,12 @@ export interface HarmonicCentralityRow {
 
 export function buildHarmonicCentrality(
   edgeType: string,
-  options: { select?: string } = {},
+  options: { select?: SelectClause | null } = {},
 ): AlgorithmQuery {
-  const { select = '*' } = options;
+  const { select } = options;
   assertNonEmptyString(edgeType, 'edgeType');
-  assertSafeSelect(select, 'select');
-  return buildAlgorithmSql('harmonic_centrality', [edgeType], select);
+  const selectSql = renderSelect(select ?? '*', 'select');
+  return buildAlgorithmSql('harmonic_centrality', [edgeType], selectSql);
 }
 
 export interface ClusteringCoefficientRow {
@@ -641,12 +711,12 @@ export interface ClusteringCoefficientRow {
 
 export function buildClusteringCoefficient(
   edgeType: string,
-  options: { select?: string } = {},
+  options: { select?: SelectClause | null } = {},
 ): AlgorithmQuery {
-  const { select = '*' } = options;
+  const { select } = options;
   assertNonEmptyString(edgeType, 'edgeType');
-  assertSafeSelect(select, 'select');
-  return buildAlgorithmSql('clustering_coefficient', [edgeType], select);
+  const selectSql = renderSelect(select ?? '*', 'select');
+  return buildAlgorithmSql('clustering_coefficient', [edgeType], selectSql);
 }
 
 export interface TriangleCountRow {
@@ -656,12 +726,12 @@ export interface TriangleCountRow {
 
 export function buildTriangleCount(
   edgeType: string,
-  options: { select?: string } = {},
+  options: { select?: SelectClause | null } = {},
 ): AlgorithmQuery {
-  const { select = '*' } = options;
+  const { select } = options;
   assertNonEmptyString(edgeType, 'edgeType');
-  assertSafeSelect(select, 'select');
-  return buildAlgorithmSql('triangle_count', [edgeType], select);
+  const selectSql = renderSelect(select ?? '*', 'select');
+  return buildAlgorithmSql('triangle_count', [edgeType], selectSql);
 }
 
 export interface StronglyConnectedComponentsRow {
@@ -671,14 +741,14 @@ export interface StronglyConnectedComponentsRow {
 
 export function buildStronglyConnectedComponents(
   edgeType: string,
-  options: { select?: string } = {},
+  options: { select?: SelectClause | null } = {},
 ): AlgorithmQuery {
-  const { select = '*' } = options;
+  const { select } = options;
   assertNonEmptyString(edgeType, 'edgeType');
-  assertSafeSelect(select, 'select');
+  const selectSql = renderSelect(select ?? '*', 'select');
   return buildAlgorithmSql(
     'strongly_connected_components',
     [edgeType],
-    select,
+    selectSql,
   );
 }

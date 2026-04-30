@@ -2,9 +2,14 @@
  * QA-GDB-492 — Adversarial tests for algorithm query builders.
  *
  * Verifies prior bug-classes from the Python sibling (GDB-491):
- *   GDB-662 — raw `select` interpolation → SQL injection
+ *   GDB-662 — raw `select` interpolation → SQL injection (denylist easily
+ *             bypassed; FIXED in GDB-665 by switching to allowlist
+ *             `string[]` + literal "*" only)
  *   GDB-663 — NaN/Infinity slipping through numeric validators
  *   GDB-664 — whitespace-only `edgeType`
+ *   GDB-665 — denylist bypass via UNION SELECT, subqueries, etc. (FIXED)
+ *   GDB-666 — no length cap on `select` (FIXED in GDB-665 — 64-char per
+ *             identifier, 1000-entry array cap)
  *
  * Plus deeper adversarial pushes: unicode, encoded variants, prototype
  * pollution, BigInt, boxed numbers, parameter-binding consistency, etc.
@@ -177,85 +182,228 @@ describe('QA TS numeric type confusion', () => {
 });
 
 // ---------------------------------------------------------------------------
-// GDB-662 regression — SELECT interpolation injection attempts
+// GDB-665 regression — SELECT injection now blocked by allowlist
+//
+// The previous denylist (GDB-662) blocked ;, --, /*, */, \0 but was trivially
+// bypassed by UNION SELECT, scalar subqueries, etc. The fix (GDB-665) replaces
+// it with an allowlist: only the literal "*" or an array of identifiers
+// matching ^[A-Za-z_][A-Za-z0-9_]*$.
 // ---------------------------------------------------------------------------
-describe('QA_GDB-662 SELECT injection attempts', () => {
-  // Direct denylist hits
-  it('rejects select with semicolon', () => {
-    expect(() => buildPagerank('e', { select: '*; DROP TABLE users' })).toThrow(TypeError);
+describe('QA_GDB-665 SELECT injection rejected by allowlist', () => {
+  // String-shaped attacks — only the exact string "*" passes; everything else
+  // throws TypeError.
+  it('rejects select with semicolon (raw string)', () => {
+    expect(() =>
+      buildPagerank('e', { select: '*; DROP TABLE users' as any }),
+    ).toThrow(TypeError);
   });
-  it('rejects select with -- comment', () => {
-    expect(() => buildPagerank('e', { select: '* -- evil' })).toThrow(TypeError);
+  it('rejects select with -- comment (raw string)', () => {
+    expect(() =>
+      buildPagerank('e', { select: '* -- evil' as any }),
+    ).toThrow(TypeError);
   });
-  it('rejects select with /* */ block comment', () => {
-    expect(() => buildPagerank('e', { select: '*/* evil */' })).toThrow(TypeError);
+  it('rejects select with block comment (raw string)', () => {
+    expect(() =>
+      buildPagerank('e', { select: '*/* evil */' as any }),
+    ).toThrow(TypeError);
   });
-  it('rejects select with stray /*', () => {
-    expect(() => buildPagerank('e', { select: '* /* evil' })).toThrow(TypeError);
+  it('rejects select with stray /* (raw string)', () => {
+    expect(() =>
+      buildPagerank('e', { select: '* /* evil' as any }),
+    ).toThrow(TypeError);
   });
-  it('rejects select with stray */', () => {
-    expect(() => buildPagerank('e', { select: '* */' })).toThrow(TypeError);
+  it('rejects select with stray */ (raw string)', () => {
+    expect(() => buildPagerank('e', { select: '* */' as any })).toThrow(
+      TypeError,
+    );
   });
-  it('rejects select with null byte', () => {
-    expect(() => buildPagerank('e', { select: '*\0DROP' })).toThrow(TypeError);
+  it('rejects select with null byte (raw string)', () => {
+    expect(() =>
+      buildPagerank('e', { select: '*\0DROP' as any }),
+    ).toThrow(TypeError);
   });
-  it('rejects empty select', () => {
-    expect(() => buildPagerank('e', { select: '' })).toThrow(TypeError);
+  it('rejects empty string select', () => {
+    expect(() => buildPagerank('e', { select: '' as any })).toThrow(TypeError);
   });
-  it('rejects whitespace-only select', () => {
-    expect(() => buildPagerank('e', { select: '   ' })).toThrow(TypeError);
+  it('rejects whitespace-only string select', () => {
+    expect(() => buildPagerank('e', { select: '   ' as any })).toThrow(
+      TypeError,
+    );
   });
-  it('rejects non-string select', () => {
+  it('rejects non-string, non-array select (number)', () => {
     expect(() => buildPagerank('e', { select: 42 as any })).toThrow(TypeError);
   });
+  it('rejects non-string, non-array select (object)', () => {
+    expect(() =>
+      buildPagerank('e', { select: { a: 1 } as any }),
+    ).toThrow(TypeError);
+  });
 
-  // Allowlist-bypass attacks. These DO contain dangerous payloads but evade
-  // the denylist. Each `expect.fail` means the builder accepted attacker SQL.
-  it('FINDING: accepts UNION SELECT (no comment/semicolon/block needed)', () => {
-    // This is a functional injection — adversary smuggles a UNION query via
-    // the select clause to leak data from another table.
-    const q = buildPagerank('e', {
-      select: '* FROM secrets UNION SELECT password, 1.0 FROM users',
+  // Allowlist-bypass attacks that previously slipped through the denylist —
+  // FIXED. These now throw TypeError instead of leaking attacker SQL.
+  it('GDB-665 FIX: rejects UNION SELECT injection', () => {
+    expect(() =>
+      buildPagerank('e', {
+        select:
+          '* FROM secrets UNION SELECT password, 1.0 FROM users' as any,
+      }),
+    ).toThrow(TypeError);
+  });
+  it('GDB-665 FIX: rejects scalar subquery injection', () => {
+    expect(() =>
+      buildPagerank('e', {
+        select: '(SELECT password FROM users WHERE id=1) AS leak' as any,
+      }),
+    ).toThrow(TypeError);
+  });
+  it('GDB-665 FIX: rejects expression-style injection', () => {
+    expect(() =>
+      buildPagerank('e', { select: '* OR 1=1' as any }),
+    ).toThrow(TypeError);
+  });
+  it('GDB-665 FIX: rejects CRLF-smuggled FROM clause', () => {
+    expect(() =>
+      buildPagerank('e', { select: '*\r\nFROM other' as any }),
+    ).toThrow(TypeError);
+  });
+  it('GDB-665 FIX: rejects MySQL-style executable comment', () => {
+    expect(() =>
+      buildPagerank('e', { select: '/*!50000 1 */' as any }),
+    ).toThrow(TypeError);
+  });
+  it('GDB-665 FIX: rejects raw comma-separated projection string', () => {
+    expect(() =>
+      buildPagerank('e', { select: 'col1, col2' as any }),
+    ).toThrow(TypeError);
+  });
+
+  // Array-shape attacks — each element must match the allowlist regex.
+  it('rejects array element with semicolon', () => {
+    expect(() =>
+      buildPagerank('e', { select: ['col1; DROP'] }),
+    ).toThrow(TypeError);
+  });
+  it('rejects array element with quote', () => {
+    expect(() => buildPagerank('e', { select: ['"col"'] })).toThrow(
+      TypeError,
+    );
+  });
+  it('rejects array element with whitespace', () => {
+    expect(() => buildPagerank('e', { select: ['col 1'] })).toThrow(
+      TypeError,
+    );
+  });
+  it('rejects array element with leading digit', () => {
+    expect(() => buildPagerank('e', { select: ['1col'] })).toThrow(TypeError);
+  });
+  it('rejects array element with hyphen', () => {
+    expect(() => buildPagerank('e', { select: ['col-1'] })).toThrow(
+      TypeError,
+    );
+  });
+  it('rejects array element with trailing newline (GDB-669 lesson)', () => {
+    // JS regex `$` without `m` flag matches end of string, so a trailing \n
+    // should be rejected. This is the equivalent of Python's re.fullmatch
+    // pitfall caught in GDB-669 — verify it does NOT bypass.
+    expect(() => buildPagerank('e', { select: ['col1\n'] })).toThrow(
+      TypeError,
+    );
+  });
+  it('rejects array element with leading newline', () => {
+    expect(() => buildPagerank('e', { select: ['\ncol1'] })).toThrow(
+      TypeError,
+    );
+  });
+  it('rejects empty array', () => {
+    expect(() => buildPagerank('e', { select: [] })).toThrow(TypeError);
+  });
+  it('rejects empty string element', () => {
+    expect(() => buildPagerank('e', { select: [''] })).toThrow(TypeError);
+  });
+  it('rejects non-string element in array', () => {
+    expect(() =>
+      buildPagerank('e', { select: [42 as any] }),
+    ).toThrow(TypeError);
+  });
+  it('rejects unicode identifier (allowlist is ASCII-only)', () => {
+    expect(() => buildPagerank('e', { select: ['café'] })).toThrow(
+      TypeError,
+    );
+  });
+
+  // GDB-666 — length caps
+  it('GDB-666 FIX: rejects identifier longer than 64 chars', () => {
+    const tooLong = 'a'.repeat(65);
+    expect(() => buildPagerank('e', { select: [tooLong] })).toThrow(
+      RangeError,
+    );
+  });
+  it('GDB-666 FIX: accepts identifier exactly 64 chars', () => {
+    const okLength = 'a'.repeat(64);
+    expect(() => buildPagerank('e', { select: [okLength] })).not.toThrow();
+  });
+  it('GDB-666 FIX: rejects array longer than 1000 entries', () => {
+    const huge = Array.from({ length: 1001 }, (_, i) => `c${i}`);
+    expect(() => buildPagerank('e', { select: huge })).toThrow(RangeError);
+  });
+  it('GDB-666 FIX: accepts array of exactly 1000 entries', () => {
+    const ok = Array.from({ length: 1000 }, (_, i) => `c${i}`);
+    expect(() => buildPagerank('e', { select: ok })).not.toThrow();
+  });
+
+  // Happy paths — confirm the allowed shapes still work.
+  it('accepts the literal "*"', () => {
+    const q = buildPagerank('e', { select: '*' });
+    expect(q.text.startsWith('SELECT * FROM')).toBe(true);
+  });
+  it('accepts undefined (defaults to "*")', () => {
+    const q = buildPagerank('e', { select: undefined });
+    expect(q.text.startsWith('SELECT * FROM')).toBe(true);
+  });
+  it('accepts null (defaults to "*")', () => {
+    const q = buildPagerank('e', { select: null });
+    expect(q.text.startsWith('SELECT * FROM')).toBe(true);
+  });
+  it('accepts an array of valid identifiers and double-quotes them', () => {
+    const q = buildPagerank('e', { select: ['node_id', 'score'] });
+    expect(q.text).toBe(
+      'SELECT "node_id", "score" FROM pagerank($1, $2, $3)',
+    );
+  });
+  it('accepts a single-element array', () => {
+    const q = buildPagerank('e', { select: ['node_id'] });
+    expect(q.text).toBe('SELECT "node_id" FROM pagerank($1, $2, $3)');
+  });
+  it('accepts identifier with underscores and digits', () => {
+    const q = buildPagerank('e', { select: ['_col_1', 'col_2_b'] });
+    expect(q.text).toContain('"_col_1", "col_2_b"');
+  });
+
+  // All 11 builders enforce the new validation — no skipped builder.
+  for (const [name, fn] of ALL_BUILDERS) {
+    it(`${name} rejects raw projection string`, () => {
+      expect(() =>
+        (fn as any)('e', { select: 'col1, col2' }),
+      ).toThrow(TypeError);
     });
-    // The denylist has no defense against this. Document the bug.
-    expect(q.text).toContain('UNION SELECT password');
-  });
-
-  it('FINDING: accepts subquery injection', () => {
-    const q = buildPagerank('e', {
-      select: '(SELECT password FROM users WHERE id=1) AS leak',
+    it(`${name} rejects UNION SELECT injection`, () => {
+      expect(() =>
+        (fn as any)('e', {
+          select: '* FROM secrets UNION SELECT password FROM users',
+        }),
+      ).toThrow(TypeError);
     });
-    expect(q.text).toContain('SELECT password FROM users');
-  });
-
-  it('FINDING: accepts unicode line separator U+2028 (newline equivalent in some parsers)', () => {
-    // Some SQL parsers treat U+2028 / U+2029 as line terminators that end
-    // line comments — denylist for "--" already covers comments, but newline
-    // smuggling itself is not blocked.
-    const q = buildPagerank('e', { select: '* OR 1=1' });
-    expect(q.text).toContain(' ');
-  });
-
-  it('FINDING: accepts CRLF newline that could break server-side log parsers', () => {
-    const q = buildPagerank('e', { select: '*\r\nFROM other' });
-    expect(q.text).toContain('\r\n');
-  });
-
-  it('FINDING: accepts very long select (no length cap)', () => {
-    const huge = 'a'.repeat(1_000_000);
-    const q = buildPagerank('e', { select: huge });
-    expect(q.text.length).toBeGreaterThan(1_000_000);
-  });
-
-  // Confirm: nested comment trick — server might parse /*! ... */ specially.
-  // The denylist catches /* and */ so this should still throw.
-  it('rejects MySQL-style executable comment /*! ... */', () => {
-    expect(() => buildPagerank('e', { select: '/*!50000 1 */' })).toThrow(TypeError);
-  });
-
-  it('rejects backslash-escaped semicolon (denylist still catches the bare ;)', () => {
-    expect(() => buildPagerank('e', { select: '*\\; SELECT 1' })).toThrow(TypeError);
-  });
+    it(`${name} accepts string "*" select`, () => {
+      expect(() => (fn as any)('e', { select: '*' })).not.toThrow();
+    });
+    it(`${name} accepts array of identifiers select`, () => {
+      const q = (fn as any)('e', { select: ['node_id'] });
+      expect(q.text).toContain('"node_id"');
+    });
+    it(`${name} rejects empty array select`, () => {
+      expect(() => (fn as any)('e', { select: [] })).toThrow(TypeError);
+    });
+  }
 });
 
 // ---------------------------------------------------------------------------
