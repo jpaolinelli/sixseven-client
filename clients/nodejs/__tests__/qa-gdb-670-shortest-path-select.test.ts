@@ -393,16 +393,16 @@ describe('QA GDB-670 side-channel: non-select options', () => {
     ).toThrow(TypeError);
   });
 
-  it('FINDING: direction is NOT validated and is raw-interpolated', () => {
-    // This is a SEPARATE injection vector beyond the GDB-670 fix scope.
-    // buildShortestPath does `coreSql += " DIRECTION " + options.direction`
-    // with no allowlist. A malicious caller can inject SQL via the
-    // `direction` field. Documenting as a finding.
-    const q = buildShortestPath('knows', 'u', 1, 'u', 2, {
-      direction: "OUT; DROP TABLE users; --" as unknown as 'OUT',
-    });
-    // The malicious payload appears verbatim in the SQL text.
-    expect(q.text).toContain('DIRECTION OUT; DROP TABLE users; --');
+  it('GDB-671 FIXED: direction is now allowlist-validated', () => {
+    // This was the original bug-finding case for GDB-671 (filed during
+    // GDB-670 QA). Pre-fix, `coreSql += " DIRECTION " + options.direction`
+    // emitted the payload verbatim. Post-fix, validateTraversalDirection
+    // rejects anything outside the IN/OUT/BOTH allowlist.
+    expect(() =>
+      buildShortestPath('knows', 'u', 1, 'u', 2, {
+        direction: 'OUT; DROP TABLE users; --' as unknown as 'OUT',
+      }),
+    ).toThrow(TypeError);
   });
 
   it('edgeType is identifier-escaped (double-quoted)', () => {
