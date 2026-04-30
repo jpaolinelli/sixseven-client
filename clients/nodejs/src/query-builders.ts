@@ -38,12 +38,10 @@ function assertPositiveInt(value: number, name: string): void {
 // Algorithm builder helpers (GDB-492)
 // ---------------------------------------------------------------------------
 
-const VALID_DEGREE_DIRECTIONS = ['IN', 'OUT', 'BOTH'] as const;
 // Allowlist of valid edge-traversal direction tokens. Used by every builder
 // that emits a `DIRECTION <token>` clause (buildTraverse, buildShortestPath,
-// and the WITHIN TRAVERSE clause in buildNearest). The values intentionally
-// mirror VALID_DEGREE_DIRECTIONS — kept as a separate constant so the
-// traversal-side error messages and intent stay self-documenting (GDB-671).
+// buildDegreeCentrality, and the WITHIN TRAVERSE clause in buildNearest).
+// Consolidated from the former VALID_DEGREE_DIRECTIONS duplicate (GDB-674).
 const VALID_TRAVERSAL_DIRECTIONS = ['IN', 'OUT', 'BOTH'] as const;
 type TraversalDirection = (typeof VALID_TRAVERSAL_DIRECTIONS)[number];
 
@@ -72,7 +70,7 @@ const VALID_CLOSENESS_VARIANTS = [
   'HARMONIC',
 ] as const;
 
-export type DegreeDirection = (typeof VALID_DEGREE_DIRECTIONS)[number];
+export type DegreeDirection = (typeof VALID_TRAVERSAL_DIRECTIONS)[number];
 export type ClosenessVariant = (typeof VALID_CLOSENESS_VARIANTS)[number];
 
 /**
@@ -660,13 +658,10 @@ export function buildDegreeCentrality(
 ): AlgorithmQuery {
   const { direction = 'BOTH', select } = options;
   assertNonEmptyString(edgeType, 'edgeType');
-  assertNonEmptyString(direction, 'direction');
-  const upper = direction.toUpperCase() as DegreeDirection;
-  if (!VALID_DEGREE_DIRECTIONS.includes(upper)) {
-    throw new TypeError(
-      `direction must be one of ${VALID_DEGREE_DIRECTIONS.join(', ')}, got ${direction}`,
-    );
-  }
+  // GDB-674: route through the shared validateTraversalDirection helper
+  // instead of an inline allowlist+normalization block, matching the pattern
+  // used by buildTraverse, buildShortestPath, and buildNearest.
+  const upper = validateTraversalDirection(direction, 'direction');
   const selectSql = renderSelect(select ?? '*', 'select');
   return buildAlgorithmSql('degree_centrality', [edgeType, upper], selectSql);
 }
