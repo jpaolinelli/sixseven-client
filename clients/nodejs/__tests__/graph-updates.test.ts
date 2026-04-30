@@ -323,11 +323,13 @@ describe('buildShortestPath (SELECT composability)', () => {
     expect(q.values).toEqual([1, 2]);
   });
 
-  it('supports custom SELECT clause', () => {
+  it('supports custom SELECT clause as identifier array (GDB-670)', () => {
     const q = buildShortestPath('follows', 'users', 1, 'users', 2, {
-      select: 'path_length, nodes',
+      select: ['path_length', 'nodes'],
     });
-    expect(q.text.startsWith('SELECT path_length, nodes FROM SHORTEST PATH')).toBe(true);
+    expect(
+      q.text.startsWith('SELECT "path_length", "nodes" FROM SHORTEST PATH'),
+    ).toBe(true);
   });
 
   it('supports direction and maxDepth with SELECT', () => {

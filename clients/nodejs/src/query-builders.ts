@@ -10,7 +10,13 @@ import type {
   WithinTraverseOptions,
   ShortestMatchSelector,
   ShortestMatchOptions,
+  SelectClause,
 } from './types';
+
+// Re-export SelectClause for backward compatibility — historically defined
+// here in GDB-665, now lives in `./types` so `ShortestPathOptions` (and any
+// future option-bag) can reference it without circular imports (GDB-670).
+export type { SelectClause } from './types';
 import { serializeEmbedding } from './type-parser';
 
 /**
@@ -90,14 +96,6 @@ function assertPositiveNumber(value: unknown, name: string): asserts value is nu
     throw new RangeError(`${name} must be positive, got ${value}`);
   }
 }
-
-/**
- * Public type for algorithm builder `select` parameters.
- *
- * Either the literal `"*"` (the default — all columns) or an array of column
- * identifier strings. Each identifier must match `^[A-Za-z_][A-Za-z0-9_]*$`.
- */
-export type SelectClause = '*' | readonly string[];
 
 // Maximum identifier length (matches PostgreSQL's NAMEDATALEN convention).
 const MAX_SELECT_IDENTIFIER_LENGTH = 64;
@@ -497,8 +495,11 @@ export function buildShortestPath(
   if (options.legacySyntax) {
     sql = coreSql;
   } else {
-    const selectClause = options.select ?? '*';
-    sql = `SELECT ${selectClause} FROM ${coreSql}`;
+    // GDB-670: route options.select through the same allowlist used by the
+    // graph-algorithm builders (GDB-665) to eliminate SQL injection via raw
+    // projection-string interpolation.
+    const selectSql = renderSelect(options.select ?? '*', 'select');
+    sql = `SELECT ${selectSql} FROM ${coreSql}`;
   }
 
   return { text: sql, values };
