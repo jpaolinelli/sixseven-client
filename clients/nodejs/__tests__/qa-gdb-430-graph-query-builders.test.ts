@@ -37,26 +37,29 @@ describe('QA buildMatch — boundary values', () => {
     expect(q.text).toBe('SELECT a FROM MATCH (a:"users")');
   });
 
-  it('should handle empty returnItems array', () => {
-    const q = buildMatch(
-      [
-        { alias: 'a', table: 'users' },
-        { alias: 'r', edgeType: 'follows', direction: 'OUT' },
-        { alias: 'b', table: 'users' },
-      ],
-      { returnItems: [] },
-    );
-    // Empty return list produces "SELECT  FROM MATCH ..."
-    expect(q.text).toContain('SELECT  FROM MATCH');
+  it('should reject empty returnItems array (GDB-673)', () => {
+    expect(() =>
+      buildMatch(
+        [
+          { alias: 'a', table: 'users' },
+          { alias: 'r', edgeType: 'follows', direction: 'OUT' },
+          { alias: 'b', table: 'users' },
+        ],
+        { returnItems: [] },
+      ),
+    ).toThrow(TypeError);
   });
 
-  it('should handle very long table and alias names', () => {
+  it('should reject very long returnItems identifiers (GDB-673)', () => {
     const longName = 'a'.repeat(500);
-    const q = buildMatch(
-      [{ alias: longName, table: longName }],
-      { returnItems: [longName] },
-    );
-    expect(q.text).toContain(`(${longName}:"${longName}")`);
+    // The table/alias are not validated by returnItems, but the return item
+    // exceeds the 64-char limit and must be rejected.
+    expect(() =>
+      buildMatch(
+        [{ alias: longName, table: longName }],
+        { returnItems: [longName] },
+      ),
+    ).toThrow(RangeError);
   });
 
   it('should handle special characters in table names', () => {
@@ -320,9 +323,10 @@ describe('QA buildShortestMatch — boundary values', () => {
     expect(q.text).not.toContain('5');
   });
 
-  it('should handle empty returnItems', () => {
-    const q = buildShortestMatch(pattern, [], 'ANY SHORTEST');
-    expect(q.text).toContain('SELECT  FROM MATCH');
+  it('should reject empty returnItems (GDB-673)', () => {
+    expect(() =>
+      buildShortestMatch(pattern, [], 'ANY SHORTEST'),
+    ).toThrow(TypeError);
   });
 
   it('should handle empty pattern', () => {

@@ -188,6 +188,80 @@ const MAX_SELECT_IDENTIFIER_COUNT = 1000;
 // equivalent to Python's `re.fullmatch`. (See GDB-669 lesson.)
 const SELECT_IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
+// ---------------------------------------------------------------------------
+// Return-item validation for MATCH / SHORTEST MATCH projections (GDB-673)
+// ---------------------------------------------------------------------------
+
+// Maximum number of return items in a MATCH projection.
+const MAX_RETURN_ITEM_COUNT = 1000;
+
+/**
+ * Allowlist regex for MATCH `returnItems` entries.
+ *
+ * Accepted shapes:
+ *   - `*`                    → bare star (all columns)
+ *   - `identifier`           → simple column name
+ *   - `qualifier.identifier` → qualified column (alias.column)
+ *   - `qualifier.*`          → qualified star (alias.*)
+ *
+ * Each segment must match `[A-Za-z_][A-Za-z0-9_]*` (same rule as
+ * `SELECT_IDENTIFIER_RE`). No other punctuation, no expressions, no
+ * subqueries.
+ */
+const RETURN_ITEM_RE = /^(?:\*|[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*|\.\*)?)$/;
+
+/**
+ * Validate a single `returnItems[i]` entry for MATCH / SHORTEST MATCH
+ * projections. Rejects raw expressions, subqueries, and any punctuation
+ * outside the qualified-identifier pattern above.
+ *
+ * @param item  The return item string to validate.
+ * @param index The array index (for error messages).
+ * @returns The validated item string (unchanged).
+ */
+function validateReturnItem(item: unknown, index: number): string {
+  if (typeof item !== 'string') {
+    throw new TypeError(
+      `returnItems[${index}] must be a string, got ${typeof item}`,
+    );
+  }
+  if (item.length === 0) {
+    throw new TypeError(`returnItems[${index}] must be a non-empty string`);
+  }
+  if (item.length > MAX_SELECT_IDENTIFIER_LENGTH) {
+    throw new RangeError(
+      `returnItems[${index}] is ${item.length} characters; maximum is ${MAX_SELECT_IDENTIFIER_LENGTH}`,
+    );
+  }
+  if (!RETURN_ITEM_RE.test(item)) {
+    throw new TypeError(
+      `returnItems[${index}] is not a valid return item: ${JSON.stringify(item)}`,
+    );
+  }
+  return item;
+}
+
+/**
+ * Validate and render a `returnItems` array into a SQL projection string
+ * for MATCH / SHORTEST MATCH queries. (GDB-673)
+ */
+function renderReturnItems(items: unknown, name: string): string {
+  if (!Array.isArray(items)) {
+    throw new TypeError(
+      `${name} must be an array of return item identifiers, got ${typeof items}`,
+    );
+  }
+  if (items.length === 0) {
+    throw new TypeError(`${name} must contain at least one return item`);
+  }
+  if (items.length > MAX_RETURN_ITEM_COUNT) {
+    throw new RangeError(
+      `${name} has ${items.length} entries; maximum is ${MAX_RETURN_ITEM_COUNT}`,
+    );
+  }
+  return items.map((item, i) => validateReturnItem(item, i)).join(', ');
+}
+
 /**
  * Validate a user-provided SELECT projection.
  *
@@ -509,6 +583,10 @@ export function buildMatch(
 
   // GDB-672: validate `where` once, before either legacy or modern branch.
   const safeWhere = options.where ? validateSqlFragment(options.where, 'where') : undefined;
+  // GDB-673: validate every returnItems entry against a qualified-identifier
+  // allowlist before interpolating into the projection. This closes the same
+  // class of SQL injection that GDB-665/GDB-670 fixed for algorithm SELECT.
+  const returnItemsSql = renderReturnItems(options.returnItems, 'returnItems');
 
   let sql: string;
   if (options.legacySyntax) {
@@ -516,9 +594,9 @@ export function buildMatch(
     if (safeWhere) {
       sql += ` WHERE ${safeWhere}`;
     }
-    sql += ` RETURN ${options.returnItems.join(', ')}`;
+    sql += ` RETURN ${returnItemsSql}`;
   } else {
-    sql = `SELECT ${options.returnItems.join(', ')} FROM MATCH ${patternSql}`;
+    sql = `SELECT ${returnItemsSql} FROM MATCH ${patternSql}`;
     if (safeWhere) {
       sql += ` WHERE ${safeWhere}`;
     }
@@ -551,7 +629,11 @@ export function buildShortestMatch(
     selectorSql = normalized;
   }
 
-  let sql = `SELECT ${returnItems.join(', ')} FROM MATCH ${selectorSql} ${patternSql}`;
+  // GDB-673: validate returnItems through the same qualified-identifier
+  // allowlist used by buildMatch above.
+  const returnItemsSql = renderReturnItems(returnItems, 'returnItems');
+
+  let sql = `SELECT ${returnItemsSql} FROM MATCH ${selectorSql} ${patternSql}`;
 
   if (options.weight) {
     // GDB-672: validate the raw SQL fragment to reject injection vectors.
