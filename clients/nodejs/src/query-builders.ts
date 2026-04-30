@@ -39,6 +39,33 @@ function assertPositiveInt(value: number, name: string): void {
 // ---------------------------------------------------------------------------
 
 const VALID_DEGREE_DIRECTIONS = ['IN', 'OUT', 'BOTH'] as const;
+// Allowlist of valid edge-traversal direction tokens. Used by every builder
+// that emits a `DIRECTION <token>` clause (buildTraverse, buildShortestPath,
+// and the WITHIN TRAVERSE clause in buildNearest). The values intentionally
+// mirror VALID_DEGREE_DIRECTIONS — kept as a separate constant so the
+// traversal-side error messages and intent stay self-documenting (GDB-671).
+const VALID_TRAVERSAL_DIRECTIONS = ['IN', 'OUT', 'BOTH'] as const;
+type TraversalDirection = (typeof VALID_TRAVERSAL_DIRECTIONS)[number];
+
+/**
+ * Validate a user-provided traversal direction against the allowlist and
+ * return its uppercase form for safe interpolation. Throws TypeError for
+ * non-strings, empty/whitespace strings, or strings outside the allowlist.
+ *
+ * This is the runtime defense against `as any` casts that bypass the
+ * TypeScript `'OUT' | 'IN' | 'BOTH'` narrowing. (GDB-671: same class as the
+ * GDB-665 / GDB-670 SELECT-clause injections.)
+ */
+function validateTraversalDirection(value: unknown, name: string): TraversalDirection {
+  assertNonEmptyString(value, name);
+  const upper = value.toUpperCase();
+  if (!(VALID_TRAVERSAL_DIRECTIONS as readonly string[]).includes(upper)) {
+    throw new TypeError(
+      `${name} must be one of ${VALID_TRAVERSAL_DIRECTIONS.join(', ')}, got ${JSON.stringify(value)}`,
+    );
+  }
+  return upper as TraversalDirection;
+}
 const VALID_CLOSENESS_VARIANTS = [
   'STANDARD',
   'WASSERMAN_FAUST',
@@ -233,7 +260,12 @@ export function buildTraverse(
   const values: unknown[] = [startId];
   let sql = `TRAVERSE ${escapeIdentifier(edgeType)} FROM ${escapeIdentifier(fromTable)}($1)`;
 
-  sql += ` DIRECTION ${direction}`;
+  // GDB-671: validate `direction` against an allowlist before interpolating,
+  // mirroring the buildDegreeCentrality pattern. The TypeScript type narrows
+  // this to 'OUT' | 'IN' | 'BOTH', but TS is not enforced at runtime — `as any`
+  // casts can otherwise smuggle arbitrary SQL into the DIRECTION clause.
+  const safeDirection = validateTraversalDirection(direction, 'direction');
+  sql += ` DIRECTION ${safeDirection}`;
 
   if (maxDepth !== undefined) {
     assertPositiveInt(maxDepth, 'maxDepth');
@@ -301,8 +333,11 @@ export function buildNearest(
     values.push(wt.startId);
     const paramIdx = values.length;
     sql += ` WITHIN TRAVERSE ${escapeIdentifier(wt.edgeType)} FROM ${escapeIdentifier(wt.fromTable)}($${paramIdx})`;
-    if (wt.direction) {
-      sql += ` DIRECTION ${wt.direction}`;
+    if (wt.direction !== undefined) {
+      // GDB-671: WITHIN TRAVERSE shares the same DIRECTION-clause shape as
+      // buildTraverse / buildShortestPath; route it through the same allowlist.
+      const safeDir = validateTraversalDirection(wt.direction, 'withinTraverse.direction');
+      sql += ` DIRECTION ${safeDir}`;
     }
     if (wt.maxDepth !== undefined) {
       assertPositiveInt(wt.maxDepth, 'maxDepth');
@@ -482,8 +517,11 @@ export function buildShortestPath(
   const values: unknown[] = [fromId, toId];
   let coreSql = `SHORTEST PATH FROM ${escapeIdentifier(fromTable)}($1) TO ${escapeIdentifier(toTable)}($2) VIA ${escapeIdentifier(edgeType)}`;
 
-  if (options.direction) {
-    coreSql += ` DIRECTION ${options.direction}`;
+  if (options.direction !== undefined) {
+    // GDB-671: validate against allowlist; raw interpolation here was the
+    // SQL-injection sink reported during QA of GDB-670.
+    const safeDirection = validateTraversalDirection(options.direction, 'direction');
+    coreSql += ` DIRECTION ${safeDirection}`;
   }
 
   if (options.maxDepth !== undefined) {
