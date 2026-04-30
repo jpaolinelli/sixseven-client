@@ -124,6 +124,63 @@ function assertPositiveNumber(value: unknown, name: string): asserts value is nu
   }
 }
 
+// ---------------------------------------------------------------------------
+// SQL fragment validation (GDB-672)
+// ---------------------------------------------------------------------------
+
+// Maximum length for a raw SQL fragment (WHERE predicate, WEIGHT expression).
+// This is generous enough for real-world predicates while limiting the blast
+// radius of any input that manages to slip through the pattern checks.
+const MAX_SQL_FRAGMENT_LENGTH = 2048;
+
+// Patterns that are never legitimate in a single WHERE predicate or WEIGHT
+// expression fragment. Anchored to reject query-stacking, comment injection,
+// and subquery exfiltration.
+const SQL_FRAGMENT_DENY_PATTERNS: ReadonlyArray<[RegExp, string]> = [
+  [/;/, 'semicolons (query stacking)'],
+  [/--/, 'SQL line comments (--)'],
+  [/\/\*/, 'SQL block comment opening (/*)'],
+  [/\*\//, 'SQL block comment closing (*/)'],
+  // Parenthesized SELECT — detects subquery injection regardless of case.
+  [/\(\s*SELECT\b/i, 'subqueries (parenthesized SELECT)'],
+];
+
+/**
+ * Validate a raw SQL expression fragment (e.g. a WHERE predicate or WEIGHT
+ * expression) to reject obviously dangerous patterns before interpolation.
+ *
+ * Since these fragments reference column names, operators, and literals, they
+ * cannot be fully parameterized. Instead we reject the most dangerous SQL
+ * injection vectors:
+ *   - Semicolons (query stacking)
+ *   - SQL comment markers (`--`, `/ *`, `* /`)
+ *   - Subqueries (`(SELECT ...`)
+ *   - Excessive length
+ *
+ * @throws TypeError if the value is not a non-empty string or matches a deny
+ *         pattern.
+ * @throws RangeError if the value exceeds the length cap.
+ */
+function validateSqlFragment(value: unknown, paramName: string): string {
+  assertNonEmptyString(value, paramName);
+
+  if (value.length > MAX_SQL_FRAGMENT_LENGTH) {
+    throw new RangeError(
+      `${paramName} exceeds maximum length of ${MAX_SQL_FRAGMENT_LENGTH} characters (got ${value.length})`,
+    );
+  }
+
+  for (const [pattern, description] of SQL_FRAGMENT_DENY_PATTERNS) {
+    if (pattern.test(value)) {
+      throw new TypeError(
+        `${paramName} contains disallowed content: ${description}`,
+      );
+    }
+  }
+
+  return value;
+}
+
 // Maximum identifier length (matches PostgreSQL's NAMEDATALEN convention).
 const MAX_SELECT_IDENTIFIER_LENGTH = 64;
 // Maximum number of columns in a single select array.
@@ -275,7 +332,9 @@ export function buildTraverse(
   sql += ` MODE ${mode}`;
 
   if (where) {
-    sql += ` WHERE ${where}`;
+    // GDB-672: validate the raw SQL fragment to reject injection vectors.
+    const safeWhere = validateSqlFragment(where, 'where');
+    sql += ` WHERE ${safeWhere}`;
   }
 
   if (fetch) {
@@ -321,7 +380,9 @@ export function buildNearest(
   let sql = `NEAREST ${k} FROM ${escapeIdentifier(table)}.${escapeIdentifier(column)} TO $1`;
 
   if (where) {
-    sql += ` WHERE ${where}`;
+    // GDB-672: validate the raw SQL fragment to reject injection vectors.
+    const safeWhere = validateSqlFragment(where, 'where');
+    sql += ` WHERE ${safeWhere}`;
   }
 
   if (metric && metric !== 'COSINE') {
@@ -448,17 +509,20 @@ export function buildMatch(
 ): { text: string; values: unknown[] } {
   const patternSql = buildMatchPattern(pattern);
 
+  // GDB-672: validate `where` once, before either legacy or modern branch.
+  const safeWhere = options.where ? validateSqlFragment(options.where, 'where') : undefined;
+
   let sql: string;
   if (options.legacySyntax) {
     sql = `MATCH ${patternSql}`;
-    if (options.where) {
-      sql += ` WHERE ${options.where}`;
+    if (safeWhere) {
+      sql += ` WHERE ${safeWhere}`;
     }
     sql += ` RETURN ${options.returnItems.join(', ')}`;
   } else {
     sql = `SELECT ${options.returnItems.join(', ')} FROM MATCH ${patternSql}`;
-    if (options.where) {
-      sql += ` WHERE ${options.where}`;
+    if (safeWhere) {
+      sql += ` WHERE ${safeWhere}`;
     }
   }
 
@@ -492,11 +556,15 @@ export function buildShortestMatch(
   let sql = `SELECT ${returnItems.join(', ')} FROM MATCH ${selectorSql} ${patternSql}`;
 
   if (options.weight) {
-    sql += ` WEIGHT ${options.weight}`;
+    // GDB-672: validate the raw SQL fragment to reject injection vectors.
+    const safeWeight = validateSqlFragment(options.weight, 'weight');
+    sql += ` WEIGHT ${safeWeight}`;
   }
 
   if (options.where) {
-    sql += ` WHERE ${options.where}`;
+    // GDB-672: validate the raw SQL fragment to reject injection vectors.
+    const safeWhere = validateSqlFragment(options.where, 'where');
+    sql += ` WHERE ${safeWhere}`;
   }
 
   return { text: sql, values: [] };

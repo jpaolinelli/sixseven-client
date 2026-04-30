@@ -321,58 +321,77 @@ describe('GDB-671 QA — buildDegreeCentrality regression (inline allowlist)', (
 });
 
 // ---------------------------------------------------------------------------
-// Reviewer audit follow-up — confirm raw `where` / `weight` / `returnItems`
-// interpolation is exploitable. These are EVIDENCE tests for the bug tickets
-// to be filed (NOT acceptance tests for GDB-671). They assert the bug exists
-// today; once the follow-up tickets fix it, these tests will need updating.
+// GDB-672 fix verification — confirm raw `where` / `weight` interpolation
+// is now rejected. These tests previously asserted the bug existed; updated
+// to assert the fix works (injection attempts now throw TypeError).
 // ---------------------------------------------------------------------------
 
-describe('GDB-671 QA — Evidence: unrelated raw-interpolation sinks (audit)', () => {
-  it('buildTraverse `where` interpolates raw SQL verbatim (BUG)', () => {
+describe('GDB-672 fix — raw where/weight interpolation now rejected', () => {
+  it('buildTraverse `where` rejects SQL injection (semicolon + comment)', () => {
     const malicious = "1=1; DROP TABLE users; --";
-    const q = buildTraverse('follows', 'users', 1, { where: malicious });
-    expect(q.text).toContain(`WHERE ${malicious}`);
-    expect(q.text).toContain('DROP TABLE users');
+    expect(() =>
+      buildTraverse('follows', 'users', 1, { where: malicious }),
+    ).toThrow(TypeError);
   });
 
-  it('buildNearest `where` interpolates raw SQL verbatim (BUG)', () => {
+  it('buildNearest `where` rejects SQL injection (semicolon + comment)', () => {
     const malicious = "1=1; DROP TABLE docs; --";
-    const q = buildNearest('docs', 'embedding', [0.1, 0.2], { where: malicious });
-    expect(q.text).toContain(`WHERE ${malicious}`);
+    expect(() =>
+      buildNearest('docs', 'embedding', [0.1, 0.2], { where: malicious }),
+    ).toThrow(TypeError);
   });
 
-  it('buildMatch `where` interpolates raw SQL verbatim (BUG)', () => {
+  it('buildMatch `where` rejects SQL injection (semicolon + comment)', () => {
     const malicious = "1=1; DROP TABLE u; --";
-    const q = buildMatch(
-      [{ alias: 'a', table: 'users' }],
-      { returnItems: ['a.id'], where: malicious },
-    );
-    expect(q.text).toContain(malicious);
+    expect(() =>
+      buildMatch(
+        [{ alias: 'a', table: 'users' }],
+        { returnItems: ['a.id'], where: malicious },
+      ),
+    ).toThrow(TypeError);
   });
 
-  it('buildMatch `returnItems[]` interpolated raw (BUG)', () => {
+  it('buildShortestMatch `weight` rejects SQL injection (semicolon + comment)', () => {
+    const maliciousW = '1; DROP TABLE x; --';
+    expect(() =>
+      buildShortestMatch(
+        [
+          { alias: 'a', table: 'users' },
+          { alias: 'r', edgeType: 'knows', direction: 'OUT' },
+          { alias: 'b', table: 'users' },
+        ],
+        ['a.id'],
+        'ANY',
+        { weight: maliciousW },
+      ),
+    ).toThrow(TypeError);
+  });
+
+  it('buildShortestMatch `where` rejects SQL injection (semicolon + comment)', () => {
+    const maliciousWhere = '1=1; --';
+    expect(() =>
+      buildShortestMatch(
+        [
+          { alias: 'a', table: 'users' },
+          { alias: 'r', edgeType: 'knows', direction: 'OUT' },
+          { alias: 'b', table: 'users' },
+        ],
+        ['a.id'],
+        'ANY',
+        { where: maliciousWhere },
+      ),
+    ).toThrow(TypeError);
+  });
+
+  it('buildMatch `returnItems[]` interpolated raw (BUG — not addressed by GDB-672)', () => {
+    // returnItems is a separate concern not covered by GDB-672; this test
+    // documents that it still passes through raw. A future ticket should
+    // address this.
     const malicious = '1, (SELECT password FROM secrets)';
     const q = buildMatch(
       [{ alias: 'a', table: 'users' }],
       { returnItems: [malicious] },
     );
     expect(q.text).toContain(malicious);
-  });
-
-  it('buildShortestMatch `weight` and `where` interpolated raw (BUG)', () => {
-    const maliciousW = '1; DROP TABLE x; --';
-    const maliciousWhere = '1=1; --';
-    const q = buildShortestMatch(
-      [
-        { alias: 'a', table: 'users' },
-        { alias: 'r', edgeType: 'knows', direction: 'OUT' },
-        { alias: 'b', table: 'users' },
-      ],
-      ['a.id'],
-      'ANY',
-      { weight: maliciousW, where: maliciousWhere },
-    );
-    expect(q.text).toContain(`WEIGHT ${maliciousW}`);
-    expect(q.text).toContain(`WHERE ${maliciousWhere}`);
   });
 });
