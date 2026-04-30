@@ -70,12 +70,13 @@ describe('QA: buildTraverse adversarial', () => {
       .toThrow('maxDepth must be a positive integer');
   });
 
-  it('should handle where clause with SQL injection attempt', () => {
-    // WHERE is raw SQL - it's parameterized through the application, not the builder
-    const q = buildTraverse('follows', 'users', 1, {
-      where: "1=1; DROP TABLE users; --",
-    });
-    expect(q.text).toContain("WHERE 1=1; DROP TABLE users; --");
+  it('should reject where clause with SQL injection attempt (GDB-672)', () => {
+    // GDB-672: WHERE fragments are now validated to reject dangerous patterns.
+    expect(() =>
+      buildTraverse('follows', 'users', 1, {
+        where: "1=1; DROP TABLE users; --",
+      }),
+    ).toThrow(TypeError);
   });
 
   it('should handle all options as undefined', () => {
