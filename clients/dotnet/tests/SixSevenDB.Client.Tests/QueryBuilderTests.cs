@@ -510,7 +510,7 @@ public class QueryBuilderTests
     [Fact]
     public void BuildShortestPath_InvalidMaxDepth_Throws()
     {
-        Assert.Throws<ArgumentException>(() =>
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
             QueryBuilder.BuildShortestPath("follows", "users", 1, "users", 2,
                 new ShortestPathOptions { MaxDepth = 0 }));
     }

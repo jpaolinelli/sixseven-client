@@ -317,7 +317,7 @@ public class QaGdb493AlgorithmBuildersTests
     [InlineData(int.MinValue)]
     public void PageRank_IterationsNotPositive_Throws(int iterations)
     {
-        Assert.Throws<ArgumentException>(() => QueryBuilder.BuildPageRank("knows", iterations: iterations));
+        Assert.Throws<ArgumentOutOfRangeException>(() => QueryBuilder.BuildPageRank("knows", iterations: iterations));
     }
 
     [Fact]
@@ -372,7 +372,7 @@ public class QaGdb493AlgorithmBuildersTests
     [InlineData(int.MinValue)]
     public void Eigenvector_IterationsNotPositive_Throws(int iterations)
     {
-        Assert.Throws<ArgumentException>(() =>
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
             QueryBuilder.BuildEigenvectorCentrality("knows", iterations: iterations));
     }
 

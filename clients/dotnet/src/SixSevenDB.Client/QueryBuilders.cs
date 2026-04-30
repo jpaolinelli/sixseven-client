@@ -118,7 +118,7 @@ public static class QueryBuilder
     private static void AssertPositiveInt(int value, string name)
     {
         if (value < 1)
-            throw new ArgumentException($"{name} must be a positive integer, got {value}", name);
+            throw new ArgumentOutOfRangeException(name, value, $"{name} must be a positive integer, got {value}");
     }
     public static ParameterizedQuery BuildTraverse(
         string edgeType,
