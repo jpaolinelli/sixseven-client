@@ -312,6 +312,27 @@ describe('buildShortestPath', () => {
     expect(q.text).toContain('"e""dge"');
     expect(q.text).toContain('"ta""ble"');
   });
+
+  it('rejects select identifier longer than 64 characters (GDB-666)', () => {
+    expect(() =>
+      buildShortestPath('e', 't', 1, 't', 2, { select: ['a'.repeat(65)] }),
+    ).toThrow(RangeError);
+  });
+
+  it('rejects select array with more than 1000 entries (GDB-666)', () => {
+    const columns = Array.from({ length: 1001 }, (_, i) => `col${i}`);
+    expect(() =>
+      buildShortestPath('e', 't', 1, 't', 2, { select: columns }),
+    ).toThrow(RangeError);
+  });
+
+  it('rejects raw string select to prevent memory DoS (GDB-666)', () => {
+    expect(() =>
+      buildShortestPath('e', 't', 1, 't', 2, {
+        select: 'a'.repeat(1_000_000) as unknown as '*',
+      }),
+    ).toThrow(TypeError);
+  });
 });
 
 describe('buildNearest with withinTraverse', () => {

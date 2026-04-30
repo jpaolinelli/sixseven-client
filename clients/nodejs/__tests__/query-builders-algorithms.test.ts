@@ -122,6 +122,96 @@ describe('buildPagerank', () => {
 });
 
 // ---------------------------------------------------------------------------
+// GDB-666: select length cap (applies to renderSelect, shared by all builders)
+// ---------------------------------------------------------------------------
+
+describe('select length cap (GDB-666)', () => {
+  it('rejects an identifier longer than 64 characters', () => {
+    const longIdent = 'a'.repeat(65);
+    expect(() =>
+      buildPagerank('e', { select: [longIdent] }),
+    ).toThrow(RangeError);
+  });
+
+  it('accepts an identifier of exactly 64 characters', () => {
+    const ident = 'a'.repeat(64);
+    const q = buildPagerank('e', { select: [ident] });
+    expect(q.text).toContain(`"${ident}"`);
+  });
+
+  it('rejects a select array with more than 1000 entries', () => {
+    const columns = Array.from({ length: 1001 }, (_, i) => `col${i}`);
+    expect(() =>
+      buildPagerank('e', { select: columns }),
+    ).toThrow(RangeError);
+  });
+
+  it('accepts a select array with exactly 1000 entries', () => {
+    const columns = Array.from({ length: 1000 }, (_, i) => `c${i}`);
+    const q = buildPagerank('e', { select: columns });
+    expect(q.text).toContain('FROM pagerank');
+  });
+
+  it('rejects a 1MB raw string select (memory DoS vector)', () => {
+    const hugeString = 'a'.repeat(1_000_000);
+    expect(() =>
+      buildPagerank('e', { select: hugeString as unknown as '*' }),
+    ).toThrow(TypeError);
+  });
+
+  it('rejects raw string selects regardless of length', () => {
+    // Even short raw strings are rejected — only '*' literal or string[] allowed
+    expect(() =>
+      buildPagerank('e', { select: 'node_id' as unknown as '*' }),
+    ).toThrow(TypeError);
+  });
+
+  it('rejects non-string elements in select array', () => {
+    expect(() =>
+      buildPagerank('e', { select: [42 as unknown as string] }),
+    ).toThrow(TypeError);
+  });
+
+  it('rejects empty string elements in select array', () => {
+    expect(() =>
+      buildPagerank('e', { select: [''] }),
+    ).toThrow(TypeError);
+  });
+
+  it('applies the same length cap across all algorithm builders', () => {
+    const longIdent = 'a'.repeat(65);
+    const opts = { select: [longIdent] } as { select: string[] };
+
+    expect(() => buildBetweennessCentrality('e', opts)).toThrow(RangeError);
+    expect(() => buildConnectedComponents('e', opts)).toThrow(RangeError);
+    expect(() => buildLouvain('e', opts)).toThrow(RangeError);
+    expect(() => buildDegreeCentrality('e', opts)).toThrow(RangeError);
+    expect(() => buildClosenessCentrality('e', opts)).toThrow(RangeError);
+    expect(() => buildEigenvectorCentrality('e', opts)).toThrow(RangeError);
+    expect(() => buildHarmonicCentrality('e', opts)).toThrow(RangeError);
+    expect(() => buildClusteringCoefficient('e', opts)).toThrow(RangeError);
+    expect(() => buildTriangleCount('e', opts)).toThrow(RangeError);
+    expect(() => buildStronglyConnectedComponents('e', opts)).toThrow(RangeError);
+  });
+
+  it('applies the same array count cap across all algorithm builders', () => {
+    const columns = Array.from({ length: 1001 }, (_, i) => `col${i}`);
+    const opts = { select: columns };
+
+    expect(() => buildBetweennessCentrality('e', opts)).toThrow(RangeError);
+    expect(() => buildConnectedComponents('e', opts)).toThrow(RangeError);
+    expect(() => buildLouvain('e', opts)).toThrow(RangeError);
+    expect(() => buildDegreeCentrality('e', opts)).toThrow(RangeError);
+    expect(() => buildClosenessCentrality('e', opts)).toThrow(RangeError);
+    expect(() => buildEigenvectorCentrality('e', opts)).toThrow(RangeError);
+    expect(() => buildHarmonicCentrality('e', opts)).toThrow(RangeError);
+    expect(() => buildClusteringCoefficient('e', opts)).toThrow(RangeError);
+    expect(() => buildTriangleCount('e', opts)).toThrow(RangeError);
+    expect(() => buildStronglyConnectedComponents('e', opts)).toThrow(RangeError);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // buildBetweennessCentrality
 // ---------------------------------------------------------------------------
 
