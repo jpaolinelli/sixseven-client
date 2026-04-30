@@ -133,14 +133,37 @@ const MAX_SQL_FRAGMENT_LENGTH = 2048;
 
 // Patterns that are never legitimate in a single WHERE predicate or WEIGHT
 // expression fragment. Anchored to reject query-stacking, comment injection,
-// and subquery exfiltration.
+// subquery exfiltration, and standalone DML/DDL or set-operator keywords.
+//
+// GDB-675: extend the deny-list to reject SQL keywords that bypass the
+// original GDB-672 patterns. UNION (and its companions) plus bare DML/DDL
+// statements (DROP, DELETE, INSERT, UPDATE, TRUNCATE, ALTER, CREATE, GRANT,
+// REVOKE, EXEC, EXECUTE) contain no semicolons, comments, or parenthesized
+// SELECT, so they previously slipped through. The word-boundary regex below
+// matches each keyword as a standalone SQL token (case-insensitive) without
+// false-positives on column names that merely contain the keyword as a
+// substring (e.g. `user_union`, `create_date`).
+//
+// Note: SELECT is included in the keyword list, which subsumes the older
+// parenthesized-SELECT pattern. We keep the parenthesized variant as well so
+// its specific error message ("subqueries") is preserved for callers that
+// match against that text.
 const SQL_FRAGMENT_DENY_PATTERNS: ReadonlyArray<[RegExp, string]> = [
   [/;/, 'semicolons (query stacking)'],
   [/--/, 'SQL line comments (--)'],
   [/\/\*/, 'SQL block comment opening (/*)'],
   [/\*\//, 'SQL block comment closing (*/)'],
   // Parenthesized SELECT — detects subquery injection regardless of case.
+  // Checked before the bare-keyword pattern so callers see the more specific
+  // "subqueries" error message for `id IN (SELECT ...)` style payloads.
   [/\(\s*SELECT\b/i, 'subqueries (parenthesized SELECT)'],
+  // GDB-675: deny standalone DML/DDL/set-operator keywords. `\b` word
+  // boundaries ensure we don't accidentally reject column names that contain
+  // the keyword as a substring (e.g. `user_union`, `create_date`).
+  [
+    /\b(?:UNION|SELECT|INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER|CREATE|GRANT|REVOKE|EXEC|EXECUTE)\b/i,
+    'disallowed SQL keywords (UNION/SELECT/INSERT/UPDATE/DELETE/DROP/TRUNCATE/ALTER/CREATE/GRANT/REVOKE/EXEC/EXECUTE)',
+  ],
 ];
 
 /**
