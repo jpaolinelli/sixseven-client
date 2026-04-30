@@ -2,8 +2,11 @@
  * SixSevenDB SQL language support for CodeMirror 6.
  *
  * Extends the standard SQL dialect with SixSevenDB-specific keywords
- * (TRAVERSE, NEAREST, MATCH, LINK, UNLINK, EMBEDDING, REEMBED)
- * and provides autocomplete from catalog metadata.
+ * (TRAVERSE, NEAREST, MATCH, LINK, UNLINK, EMBEDDING, REEMBED) and the
+ * graph-pattern syntax added in GDB-427 (SELECT FROM MATCH, ANY/ALL/SHORTEST K
+ * path selectors, variable-length quantifiers `*min..max`, WEIGHT clause, and
+ * path functions). Also provides schema-aware autocomplete from catalog
+ * metadata.
  */
 
 import {
@@ -20,7 +23,7 @@ import type { DatabaseSchema } from "./types";
 
 // ----- SixSevenDB-specific keywords -----
 
-const SIXSEVEN_KEYWORDS = [
+export const SIXSEVEN_KEYWORDS = [
   "TRAVERSE",
   "NEAREST",
   "MATCH",
@@ -37,10 +40,14 @@ const SIXSEVEN_KEYWORDS = [
   "BREADTH",
   "HOPS",
   "WEIGHT",
+  // GDB-428: graph-pattern selectors. ALL is already a SQL keyword, but
+  // ANY is not — added here so it is highlighted in graph contexts like
+  // `MATCH ANY SHORTEST (a)-[*]->(b)`.
+  "ANY",
 ];
 
 // Standard SQL keywords (subset for autocomplete)
-const SQL_KEYWORDS = [
+export const SQL_KEYWORDS = [
   "SELECT",
   "FROM",
   "WHERE",
@@ -113,6 +120,45 @@ const SQL_KEYWORDS = [
   "FALSE",
 ];
 
+/**
+ * Graph path functions added in GDB-427. These are built-ins exposed by the
+ * server to operate on `PATH` values returned from MATCH queries.
+ */
+export const PATH_FUNCTIONS = [
+  "path_length",
+  "path_cost",
+  "nodes",
+  "edges",
+];
+
+/**
+ * Path selectors that follow `MATCH` to constrain which paths are returned.
+ * Suggested as completions immediately after `MATCH` or after the path
+ * quantifier keywords (`ANY`, `ALL`).
+ */
+export const PATH_SELECTORS = [
+  "ANY",
+  "ALL",
+  "ANY SHORTEST",
+  "ALL SHORTEST",
+  "SHORTEST",
+];
+
+/**
+ * Quantifier suggestions emitted right after a `*` inside a graph pattern,
+ * e.g. `(a)-[*..3]->(b)`. The completions cover the four supported forms:
+ * exact `*n`, range `*m..n`, upper-bound `*..n`, lower-bound `*n..`.
+ */
+export const QUANTIFIER_TEMPLATES = [
+  { label: "1..3", detail: "range (1 to 3 hops)" },
+  { label: "1..5", detail: "range (1 to 5 hops)" },
+  { label: "..3", detail: "upper bound (up to 3 hops)" },
+  { label: "..5", detail: "upper bound (up to 5 hops)" },
+  { label: "1..", detail: "lower bound (1 or more hops)" },
+  { label: "2", detail: "exact (2 hops)" },
+  { label: "3", detail: "exact (3 hops)" },
+];
+
 // Custom dialect that adds SixSevenDB keywords to SQL
 const sixsevenDialect = SQLDialect.define({
   keywords:
@@ -121,8 +167,11 @@ const sixsevenDialect = SQLDialect.define({
     SIXSEVEN_KEYWORDS.join(" ").toLowerCase(),
   types:
     "int8 int16 int32 int64 uint8 uint16 uint32 uint64 float32 float64 decimal bool string blob date time timestamp interval point json uuid embedding text integer bigint smallint real double varchar char boolean",
+  // GDB-428: register the new graph path functions as built-ins so they get
+  // function-style highlighting alongside the existing path_cost helper.
   builtin:
-    "current_timestamp current_date current_time coalesce nullif cast path_cost",
+    "current_timestamp current_date current_time coalesce nullif cast " +
+    PATH_FUNCTIONS.join(" "),
   operatorChars: "+-*/<>=~!@#%^&|?",
   specialVar: "",
   identifierQuotes: '"',
@@ -160,10 +209,77 @@ function extractTableFromContext(docText: string, pos: number): string | null {
 }
 
 /**
+ * True if the cursor is positioned immediately after a `*` inside a graph
+ * edge quantifier, e.g. `-[*` or `-[:KNOWS *`. Used to decide whether to
+ * surface quantifier templates instead of the generic keyword list.
+ */
+export function isInQuantifierContext(
+  docText: string,
+  pos: number
+): boolean {
+  const textBefore = docText.slice(0, pos);
+  // Quantifier appears inside `[...]` after an asterisk. We require the
+  // most recent unbalanced `[` to come after the most recent `]`, and the
+  // `*` to be the last non-whitespace character before the cursor.
+  const lastOpen = textBefore.lastIndexOf("[");
+  const lastClose = textBefore.lastIndexOf("]");
+  if (lastOpen === -1 || lastOpen < lastClose) return false;
+  const inside = textBefore.slice(lastOpen + 1);
+  return /\*\s*(?:\d*\.?\.?\d*)?$/.test(inside);
+}
+
+/**
+ * True if the cursor sits immediately after `MATCH` (with optional
+ * whitespace), where path selectors like `ANY SHORTEST` are expected.
+ */
+export function isAfterMatchKeyword(
+  docText: string,
+  pos: number
+): boolean {
+  const textBefore = docText.slice(0, pos);
+  return /\bMATCH\s+\w*$/i.test(textBefore);
+}
+
+/**
  * Build a CodeMirror autocomplete source from SixSevenDB schema data.
  */
 export function sixsevenCompletionSource(schemaData: SchemaCompletionData) {
   return (context: CompletionContext): CompletionResult | null => {
+    const docText = context.state.doc.toString();
+
+    // GDB-428: quantifier completions inside `[...]` after an asterisk.
+    // Trigger on `*` itself or after a partial digit/range.
+    if (isInQuantifierContext(docText, context.pos)) {
+      const partial = context.matchBefore(/[\d.]*/);
+      const from = partial ? partial.from : context.pos;
+      return {
+        from,
+        options: QUANTIFIER_TEMPLATES.map((q) => ({
+          label: q.label,
+          type: "text",
+          detail: q.detail,
+          boost: 5,
+        })),
+        validFor: /^[\d.]*$/,
+      };
+    }
+
+    // GDB-428: path selector completions immediately after `MATCH`.
+    if (isAfterMatchKeyword(docText, context.pos)) {
+      const wordMatch = context.matchBefore(/\w*/);
+      const from = wordMatch ? wordMatch.from : context.pos;
+      return {
+        from,
+        options: PATH_SELECTORS.map((sel) => ({
+          label: sel,
+          type: "keyword",
+          detail: "path selector",
+          boost: 5,
+        })),
+        validFor: /^\w*$/,
+      };
+    }
+
     // Check if we're after a dot (table.column completion)
     const dotMatch = context.matchBefore(/\w+\.\w*/);
     if (dotMatch) {
@@ -204,6 +320,16 @@ export function sixsevenCompletionSource(schemaData: SchemaCompletionData) {
       });
     }
 
+    // GDB-428: graph path functions in the global completion list.
+    for (const fn of PATH_FUNCTIONS) {
+      options.push({
+        label: fn,
+        type: "function",
+        detail: "path function",
+        boost: 1,
+      });
+    }
+
     // Table names
     for (const table of schemaData.tables) {
       options.push({
@@ -223,7 +349,6 @@ export function sixsevenCompletionSource(schemaData: SchemaCompletionData) {
     }
 
     // Context-aware column completion: if we can detect a FROM table, add its columns
-    const docText = context.state.doc.toString();
     const contextTable = extractTableFromContext(docText, context.pos);
     if (contextTable) {
       const table = schemaData.tables.find(
