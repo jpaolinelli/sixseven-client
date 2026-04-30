@@ -25,6 +25,7 @@ export {
 } from './query-builders';
 export type {
   AlgorithmQuery,
+  SelectClause,
   DegreeDirection,
   ClosenessVariant,
   PagerankOptions,
