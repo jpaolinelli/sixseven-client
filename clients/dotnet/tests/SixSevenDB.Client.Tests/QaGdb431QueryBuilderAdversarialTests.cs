@@ -294,17 +294,17 @@ public class QaGdb431QueryBuilderAdversarialTests
     // =====================================================================
 
     [Fact]
-    public void BuildShortestMatch_ShortestK0_ThrowsArgumentException()
+    public void BuildShortestMatch_ShortestK0_ThrowsArgumentOutOfRangeException()
     {
-        Assert.Throws<ArgumentException>(() =>
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
             QueryBuilder.BuildShortestMatch(StandardPattern(), ["a", "b"],
                 ShortestMatchSelector.Shortest, new ShortestMatchOptions { K = 0 }));
     }
 
     [Fact]
-    public void BuildShortestMatch_ShortestNegativeK_ThrowsArgumentException()
+    public void BuildShortestMatch_ShortestNegativeK_ThrowsArgumentOutOfRangeException()
     {
-        Assert.Throws<ArgumentException>(() =>
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
             QueryBuilder.BuildShortestMatch(StandardPattern(), ["a", "b"],
                 ShortestMatchSelector.Shortest, new ShortestMatchOptions { K = -5 }));
     }
@@ -475,17 +475,17 @@ public class QaGdb431QueryBuilderAdversarialTests
     }
 
     [Fact]
-    public void BuildShortestPath_MaxDepth0_ThrowsArgumentException()
+    public void BuildShortestPath_MaxDepth0_ThrowsArgumentOutOfRangeException()
     {
-        Assert.Throws<ArgumentException>(() =>
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
             QueryBuilder.BuildShortestPath("e", "t", 1, "t", 2,
                 new ShortestPathOptions { MaxDepth = 0 }));
     }
 
     [Fact]
-    public void BuildShortestPath_MaxDepthNegative_ThrowsArgumentException()
+    public void BuildShortestPath_MaxDepthNegative_ThrowsArgumentOutOfRangeException()
     {
-        Assert.Throws<ArgumentException>(() =>
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
             QueryBuilder.BuildShortestPath("e", "t", 1, "t", 2,
                 new ShortestPathOptions { MaxDepth = -1 }));
     }

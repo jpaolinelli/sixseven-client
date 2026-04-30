@@ -74,7 +74,7 @@ public class QueryBuildersAlgorithmsTests
     [InlineData(int.MinValue)]
     public void BuildPageRank_RejectsNonPositiveIterations(int iterations)
     {
-        Assert.Throws<ArgumentException>(
+        Assert.Throws<ArgumentOutOfRangeException>(
             () => QueryBuilder.BuildPageRank("knows", iterations: iterations));
     }
 
@@ -280,7 +280,7 @@ public class QueryBuildersAlgorithmsTests
     [InlineData(-5)]
     public void BuildEigenvectorCentrality_RejectsNonPositiveIterations(int iters)
     {
-        Assert.Throws<ArgumentException>(
+        Assert.Throws<ArgumentOutOfRangeException>(
             () => QueryBuilder.BuildEigenvectorCentrality("knows", iterations: iters));
     }
 
