@@ -90,9 +90,13 @@ function AppContent() {
     }
   }, [status, loadSchemaForCompletion]);
 
-  const databaseNames = databases
-    .filter((d) => !d.isSystem)
-    .map((d) => d.name);
+  // Include system databases (e.g. sixseven_system) in the dropdown so their
+  // tables can be queried. Keep user databases first so the default selection
+  // (databaseNames[0]) remains a non-system database.
+  const databaseNames = [
+    ...databases.filter((d) => !d.isSystem),
+    ...databases.filter((d) => d.isSystem),
+  ].map((d) => d.name);
 
   return (
     <div className="flex h-screen">
