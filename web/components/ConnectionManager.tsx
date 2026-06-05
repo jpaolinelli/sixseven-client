@@ -159,7 +159,13 @@ function ProfileModal({
 }: {
   profiles: ServerProfile[];
   activeProfile: ServerProfile;
-  onAdd: (name: string, host: string, port: number, user: string) => void;
+  onAdd: (
+    name: string,
+    host: string,
+    port: number,
+    user: string,
+    password: string
+  ) => void;
   onEdit: (profile: ServerProfile) => void;
   onDelete: (id: string) => void;
   onClose: () => void;
@@ -174,6 +180,7 @@ function ProfileModal({
       host: "localhost",
       port: 6767,
       user: "sixseven",
+      password: "sixseven",
     });
     setIsNew(true);
   };
@@ -188,7 +195,13 @@ function ProfileModal({
     if (!editing.name.trim() || !editing.host.trim()) return;
 
     if (isNew) {
-      onAdd(editing.name, editing.host, editing.port, editing.user);
+      onAdd(
+        editing.name,
+        editing.host,
+        editing.port,
+        editing.user,
+        editing.password
+      );
     } else {
       onEdit(editing);
     }
@@ -322,6 +335,19 @@ function ProfileModal({
                     value={editing.user}
                     onChange={(e) =>
                       setEditing({ ...editing, user: e.target.value })
+                    }
+                    placeholder="sixseven"
+                  />
+                </label>
+                <label className="block col-span-2">
+                  <span className="text-[10px] text-gray-500">Password</span>
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    className="w-full mt-0.5 px-2 py-1 bg-gray-900 border border-gray-700 rounded text-xs text-gray-200 focus:border-blue-600 focus:outline-none"
+                    value={editing.password}
+                    onChange={(e) =>
+                      setEditing({ ...editing, password: e.target.value })
                     }
                     placeholder="sixseven"
                   />

@@ -284,7 +284,7 @@ describe("QA — API connection parameter forwarding", () => {
     expect(mockedQuery).toHaveBeenCalledWith(
       expect.any(String),
       "testdb",
-      { host: "db.example.com", port: 5432, user: "admin" }
+      { host: "db.example.com", port: 5432, user: "admin", password: "sixseven" }
     );
   });
 

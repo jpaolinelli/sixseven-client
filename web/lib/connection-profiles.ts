@@ -20,8 +20,14 @@ const DEFAULT_PROFILE: ServerProfile = {
   host: "localhost",
   port: 6767,
   user: "sixseven",
+  password: "sixseven",
   isDefault: true,
 };
+
+/** Ensure required fields exist on profiles loaded from older clients. */
+function normalizeProfile(p: ServerProfile): ServerProfile {
+  return { ...p, password: p.password ?? "sixseven" };
+}
 
 /** Load all saved profiles. Always includes the default profile. */
 export function loadProfiles(): ServerProfile[] {
@@ -31,7 +37,7 @@ export function loadProfiles(): ServerProfile[] {
     if (!raw) return [DEFAULT_PROFILE];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed) || parsed.length === 0) return [DEFAULT_PROFILE];
-    return parsed as ServerProfile[];
+    return (parsed as ServerProfile[]).map(normalizeProfile);
   } catch {
     return [DEFAULT_PROFILE];
   }
@@ -72,7 +78,8 @@ export function addProfile(
   name: string,
   host: string,
   port: number,
-  user: string
+  user: string,
+  password = "sixseven"
 ): ServerProfile {
   const profiles = loadProfiles();
   const profile: ServerProfile = {
@@ -81,6 +88,7 @@ export function addProfile(
     host,
     port,
     user,
+    password,
   };
   profiles.push(profile);
   saveProfiles(profiles);

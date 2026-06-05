@@ -53,6 +53,7 @@ describe("POST /api/ping", () => {
       host: "prod.example.com",
       port: 5432,
       user: "admin",
+      password: "sixseven",
     });
   });
 

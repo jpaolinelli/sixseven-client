@@ -8,6 +8,8 @@ export interface ServerProfile {
   host: string;
   port: number;
   user: string;
+  /** Password for md5/scram-sha-256 auth. Ignored by servers using trust auth. */
+  password: string;
   isDefault?: boolean;
 }
 
@@ -22,4 +24,5 @@ export interface ConnectionParams {
   host: string;
   port: number;
   user: string;
+  password: string;
 }

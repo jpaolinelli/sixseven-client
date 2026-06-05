@@ -275,5 +275,6 @@ function parseConnectionParams(
     host: String(c.host),
     port: Number(c.port) || 6767,
     user: String(c.user || "sixseven"),
+    password: c.password !== undefined ? String(c.password) : "sixseven",
   };
 }

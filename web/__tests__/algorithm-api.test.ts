@@ -221,7 +221,7 @@ describe("POST /api/graph — algorithm action", () => {
     expect(mockedQuery).toHaveBeenCalledWith(
       "CALL CLUSTERING_COEFFICIENT",
       "social",
-      { host: "db.example.com", port: 5432, user: "admin" }
+      { host: "db.example.com", port: 5432, user: "admin", password: "sixseven" }
     );
   });
 

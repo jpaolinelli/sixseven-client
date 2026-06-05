@@ -11,7 +11,9 @@ function poolKey(conn: ConnectionParams | undefined, database: string): string {
     const user = process.env.SIXSEVEN_USER || "sixseven";
     return `${host}:${port}:${user}:${database}`;
   }
-  return `${conn.host}:${conn.port}:${conn.user}:${database}`;
+  // Password is part of the key so a changed credential gets a fresh pool
+  // rather than reusing one bound to the old password.
+  return `${conn.host}:${conn.port}:${conn.user}:${conn.password}:${database}`;
 }
 
 export function getPool(
@@ -25,6 +27,7 @@ export function getPool(
       host: conn?.host || process.env.SIXSEVEN_HOST || "localhost",
       port: conn?.port || parseInt(process.env.SIXSEVEN_PORT || "6767", 10),
       user: conn?.user || process.env.SIXSEVEN_USER || "sixseven",
+      password: conn?.password ?? process.env.SIXSEVEN_PASSWORD ?? "sixseven",
       database,
       max: 5,
       connectionTimeoutMillis: 5000,

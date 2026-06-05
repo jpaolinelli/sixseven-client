@@ -18,12 +18,14 @@ export async function GET(request: NextRequest) {
   const connHost = request.nextUrl.searchParams.get("connHost");
   const connPort = request.nextUrl.searchParams.get("connPort");
   const connUser = request.nextUrl.searchParams.get("connUser");
+  const connPassword = request.nextUrl.searchParams.get("connPassword");
 
   const conn: ConnectionParams | undefined = connHost
     ? {
         host: connHost,
         port: Number(connPort) || 6767,
         user: connUser || "sixseven",
+        password: connPassword ?? "sixseven",
       }
     : undefined;
 

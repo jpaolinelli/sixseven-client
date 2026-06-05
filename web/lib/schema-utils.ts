@@ -23,7 +23,7 @@ export function quoteIdent(name: string): string {
 /** Build query string with connection params for GET requests. */
 function connQueryString(conn?: ConnectionParams): string {
   if (!conn) return "";
-  return `&connHost=${encodeURIComponent(conn.host)}&connPort=${conn.port}&connUser=${encodeURIComponent(conn.user)}`;
+  return `&connHost=${encodeURIComponent(conn.host)}&connPort=${conn.port}&connUser=${encodeURIComponent(conn.user)}&connPassword=${encodeURIComponent(conn.password)}`;
 }
 
 async function fetchJson<T>(url: string): Promise<T> {
@@ -39,7 +39,7 @@ export async function fetchDatabases(
   conn?: ConnectionParams
 ): Promise<DatabaseInfo[]> {
   const cq = conn
-    ? `?connHost=${encodeURIComponent(conn.host)}&connPort=${conn.port}&connUser=${encodeURIComponent(conn.user)}`
+    ? `?connHost=${encodeURIComponent(conn.host)}&connPort=${conn.port}&connUser=${encodeURIComponent(conn.user)}&connPassword=${encodeURIComponent(conn.password)}`
     : "";
   return fetchJson<DatabaseInfo[]>(`${API_BASE}/schema${cq}`);
 }

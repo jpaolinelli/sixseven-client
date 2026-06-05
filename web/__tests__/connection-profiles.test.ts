@@ -114,6 +114,7 @@ describe("connection-profiles", () => {
         host: "ghost",
         port: 1234,
         user: "ghost",
+        password: "ghost",
       });
       const after = loadProfiles();
       expect(after).toEqual(before);

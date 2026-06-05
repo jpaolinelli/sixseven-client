@@ -37,7 +37,8 @@ interface ConnectionContextValue {
     name: string,
     host: string,
     port: number,
-    user: string
+    user: string,
+    password: string
   ) => ServerProfile;
   editProfile: (profile: ServerProfile) => void;
   removeProfile: (id: string) => void;
@@ -74,6 +75,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     host: activeProfile.host,
     port: activeProfile.port,
     user: activeProfile.user,
+    password: activeProfile.password,
   };
 
   const checkConnection = useCallback(async () => {
@@ -89,7 +91,12 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       setStatus("disconnected");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeProfile.host, activeProfile.port, activeProfile.user]);
+  }, [
+    activeProfile.host,
+    activeProfile.port,
+    activeProfile.user,
+    activeProfile.password,
+  ]);
 
   // Initial connection check + periodic ping
   useEffect(() => {
@@ -125,8 +132,8 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   );
 
   const handleAddProfile = useCallback(
-    (name: string, host: string, port: number, user: string) => {
-      const profile = addProfile(name, host, port, user);
+    (name: string, host: string, port: number, user: string, password: string) => {
+      const profile = addProfile(name, host, port, user, password);
       setProfiles(loadProfiles());
       return profile;
     },
