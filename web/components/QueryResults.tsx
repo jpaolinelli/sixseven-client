@@ -38,6 +38,10 @@ interface QueryResultsProps {
   edgeColumns?: string[];
   /** Edge-centric result rows (from dual-query MODE EDGES). */
   edgeRows?: CellValue[][];
+  /** SELECT * node-metadata columns (carry __node/__source for edge alignment). */
+  graphNodeColumns?: string[];
+  /** SELECT * node-metadata rows for graph visualization. */
+  graphNodeRows?: CellValue[][];
   /** Source (starting) node columns for graph visualization. */
   sourceNodeColumns?: string[];
   /** Source (starting) node rows for graph visualization. */
@@ -85,6 +89,8 @@ export function QueryResults({
   rows,
   edgeColumns,
   edgeRows,
+  graphNodeColumns,
+  graphNodeRows,
   sourceNodeColumns,
   sourceNodeRows,
   error,
@@ -121,10 +127,21 @@ export function QueryResults({
   const graphContainerRef = useRef<HTMLDivElement>(null);
   const networkRef = useRef<any>(null);
 
+  // Node data for the graph: prefer the SELECT * metadata result (carries
+  // __node/__source so edges resolve to real nodes); fall back to the primary
+  // result when it isn't available.
+  const graphNodeCols =
+    graphNodeColumns && graphNodeColumns.length > 0 ? graphNodeColumns : columns;
+  const graphNodeData =
+    graphNodeColumns && graphNodeColumns.length > 0 ? (graphNodeRows ?? []) : rows;
+
   // Detect graph results (meta-column detection OR TRAVERSE query fallback)
   const hasGraphResult = useMemo(
-    () => isNodeCentricResult(columns) || !!isTraverseResult,
-    [columns, isTraverseResult]
+    () =>
+      isNodeCentricResult(columns) ||
+      isNodeCentricResult(graphNodeCols) ||
+      !!isTraverseResult,
+    [columns, graphNodeCols, isTraverseResult]
   );
   const hasEdgeData = useMemo(
     () => !!(edgeColumns && edgeColumns.length > 0 && edgeRows && edgeRows.length > 0),
@@ -141,14 +158,22 @@ export function QueryResults({
   const rawGraphData: GraphViewData | null = useMemo(() => {
     if (!hasGraphResult) return null;
     return buildGraphData(
-      columns,
-      rows,
+      graphNodeCols,
+      graphNodeData,
       edgeColumns ?? [],
       edgeRows ?? [],
       sourceNodeColumns,
       sourceNodeRows
     );
-  }, [hasGraphResult, columns, rows, edgeColumns, edgeRows, sourceNodeColumns, sourceNodeRows]);
+  }, [
+    hasGraphResult,
+    graphNodeCols,
+    graphNodeData,
+    edgeColumns,
+    edgeRows,
+    sourceNodeColumns,
+    sourceNodeRows,
+  ]);
 
   // Collect available label attributes from all graph nodes
   const graphLabelOptions: string[] = useMemo(() => {

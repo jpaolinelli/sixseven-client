@@ -99,8 +99,16 @@ export function parseHopQuantifier(
  *    (edge_type, FROM table(key), DIRECTION, MAX_DEPTH) and before WHERE/FETCH.
  *
  * If the query already has MODE EDGES, returns it unchanged.
+ *
+ * @param opts.stripWhere  Also remove the WHERE clause. Edge mode only exposes
+ *   edge meta-columns (__from/__to/__depth), so a WHERE that filters on node
+ *   attributes (e.g. `WHERE city = 'London'`) makes the server reject the query
+ *   with "column not found". Callers retry with stripWhere=true on failure.
  */
-export function buildEdgeQuery(sql: string): string {
+export function buildEdgeQuery(
+  sql: string,
+  opts: { stripWhere?: boolean } = {}
+): string {
   if (/\bMODE\s+EDGES\b/i.test(sql)) return sql;
 
   // Remove trailing semicolons/whitespace
@@ -117,6 +125,13 @@ export function buildEdgeQuery(sql: string): string {
   // that don't exist in edge mode (e.g. ORDER BY name).
   edgeSql = edgeSql.replace(/\s+ORDER\s+BY\s+[\s\S]+$/i, "");
   edgeSql = edgeSql.replace(/\s+LIMIT\s+\d+\s*$/i, "");
+
+  // Optionally strip a node-attribute WHERE clause (now trailing, after the
+  // ORDER BY/LIMIT removals above) so the edge query doesn't reference columns
+  // that only exist in node mode.
+  if (opts.stripWhere) {
+    edgeSql = edgeSql.replace(/\s+WHERE\s+[\s\S]+$/i, "");
+  }
 
   // Insert MODE EDGES after the TRAVERSE core:
   //   TRAVERSE <edge> FROM <table>(<key>) [DIRECTION <dir>] [MAX_DEPTH <n>]
@@ -164,6 +179,26 @@ export function buildSourceNodeQuery(sql: string): string | null {
     : `'${source.pk.replace(/'/g, "''")}'`;
 
   return `SELECT * FROM ${source.table} WHERE id = ${pkLiteral}`;
+}
+
+/**
+ * Build a SELECT * variant of a node-mode TRAVERSE query for graph metadata.
+ *
+ * The user's own SELECT list often omits the graph meta-columns (__node,
+ * __source) needed to give each visualized node a stable identity and to
+ * resolve edge endpoints. Re-running the same traversal with `SELECT *` yields
+ * those columns (plus all node attributes) without changing the user-facing
+ * table view. WHERE/ORDER BY/LIMIT are valid in node mode and kept as-is.
+ *
+ * Returns the original SQL unchanged if it is not a TRAVERSE query.
+ */
+export function buildNodeGraphQuery(sql: string): string {
+  if (!isTraverseQuery(sql)) return sql;
+  const trimmed = sql.replace(/\s*;?\s*$/, "");
+  return trimmed.replace(
+    /^(\s*SELECT)\s+[\s\S]+?(\s+FROM\s+TRAVERSE\b)/i,
+    "$1 *$2"
+  );
 }
 
 /** Column index lookup for a result set. */

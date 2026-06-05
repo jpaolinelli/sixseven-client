@@ -21,7 +21,12 @@ import {
   clearHistory,
   type HistoryEntry,
 } from "@/lib/query-history";
-import { isTraverseQuery, buildEdgeQuery, buildSourceNodeQuery } from "@/lib/graph-query-utils";
+import {
+  isTraverseQuery,
+  buildEdgeQuery,
+  buildSourceNodeQuery,
+  buildNodeGraphQuery,
+} from "@/lib/graph-query-utils";
 
 interface QueryTab {
   id: string;
@@ -33,6 +38,9 @@ interface QueryTab {
     rows: (string | number | boolean | null)[][];
     edgeColumns?: string[];
     edgeRows?: (string | number | boolean | null)[][];
+    /** SELECT * node-metadata columns (__node/__source) for graph visualization. */
+    graphNodeColumns?: string[];
+    graphNodeRows?: (string | number | boolean | null)[][];
     /** Source (starting) node data for graph visualization. */
     sourceNodeColumns?: string[];
     sourceNodeRows?: (string | number | boolean | null)[][];
@@ -144,6 +152,18 @@ export function QueryEditor({
               }),
             })
           : null;
+        // SELECT * variant of the traversal so graph nodes carry __node/__source
+        // (the user's own SELECT list may omit them, breaking edge alignment).
+        const graphNodeFetch = isTraverse
+          ? fetch("/api/query", {
+              ...fetchOpts,
+              body: JSON.stringify({
+                sql: buildNodeGraphQuery(sql),
+                database: activeTab.database,
+                connection: connectionParams,
+              }),
+            })
+          : null;
 
         const res = await primaryFetch;
         const durationMs = Math.round(performance.now() - startTime);
@@ -171,11 +191,27 @@ export function QueryEditor({
         // Await edge + graph-node results if available (failures are non-fatal)
         let edgeColumns: string[] | undefined;
         let edgeRows: (string | number | boolean | null)[][] | undefined;
+        let graphNodeColumns: string[] | undefined;
+        let graphNodeRows: (string | number | boolean | null)[][] | undefined;
         let sourceNodeColumns: string[] | undefined;
         let sourceNodeRows: (string | number | boolean | null)[][] | undefined;
         if (edgeFetch) {
           try {
-            const edgeRes = await edgeFetch;
+            let edgeRes = await edgeFetch;
+            // The MODE EDGES query keeps the original WHERE clause, which may
+            // reference node-only columns (e.g. `WHERE city = '...'`) that don't
+            // exist in edge mode. If it errors, retry with the WHERE stripped so
+            // the graph still shows the traversal's edges.
+            if (!edgeRes.ok) {
+              edgeRes = await fetch("/api/query", {
+                ...fetchOpts,
+                body: JSON.stringify({
+                  sql: buildEdgeQuery(sql, { stripWhere: true }),
+                  database: activeTab.database,
+                  connection: connectionParams,
+                }),
+              });
+            }
             if (edgeRes.ok) {
               const edgeData = await edgeRes.json();
               edgeColumns = edgeData.columns || [];
@@ -183,6 +219,19 @@ export function QueryEditor({
             }
           } catch {
             // Edge query failure is non-fatal — graph view just won't have edges
+          }
+        }
+        if (graphNodeFetch) {
+          try {
+            const gnRes = await graphNodeFetch;
+            if (gnRes.ok) {
+              const gnData = await gnRes.json();
+              graphNodeColumns = gnData.columns || [];
+              graphNodeRows = gnData.rows || [];
+            }
+          } catch {
+            // Graph-node metadata failure is non-fatal — falls back to the
+            // primary result columns for node identity.
           }
         }
         if (sourceNodeFetch) {
@@ -210,6 +259,8 @@ export function QueryEditor({
                     rows: data.rows || [],
                     edgeColumns,
                     edgeRows,
+                    graphNodeColumns,
+                    graphNodeRows,
                     sourceNodeColumns,
                     sourceNodeRows,
                     durationMs,
@@ -449,6 +500,8 @@ export function QueryEditor({
                 rows={activeTab.results.rows}
                 edgeColumns={activeTab.results.edgeColumns}
                 edgeRows={activeTab.results.edgeRows}
+                graphNodeColumns={activeTab.results.graphNodeColumns}
+                graphNodeRows={activeTab.results.graphNodeRows}
                 sourceNodeColumns={activeTab.results.sourceNodeColumns}
                 sourceNodeRows={activeTab.results.sourceNodeRows}
                 error={activeTab.results.error}

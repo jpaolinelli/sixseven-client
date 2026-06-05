@@ -9,6 +9,7 @@ import {
   parsePathSelector,
   parseHopQuantifier,
   buildEdgeQuery,
+  buildNodeGraphQuery,
   parseTraverseSource,
   buildSourceNodeQuery,
   classifyColumns,
@@ -215,6 +216,54 @@ describe("buildEdgeQuery", () => {
     expect(buildEdgeQuery(sql)).toBe(
       "SELECT * FROM TRAVERSE follows FROM users(1) MODE EDGES"
     );
+  });
+
+  it("keeps WHERE by default (valid edge-mode filters like __depth)", () => {
+    const sql =
+      "SELECT name FROM TRAVERSE follows FROM users(1) MAX_DEPTH 3 WHERE __depth > 1";
+    expect(buildEdgeQuery(sql)).toBe(
+      "SELECT * FROM TRAVERSE follows FROM users(1) MAX_DEPTH 3 MODE EDGES WHERE __depth > 1"
+    );
+  });
+
+  it("strips WHERE when stripWhere is set (node-attribute filter)", () => {
+    const sql =
+      "SELECT username, city, __depth FROM TRAVERSE follows FROM readers(1) DIRECTION OUT MAX_DEPTH 3 WHERE city = 'London'";
+    expect(buildEdgeQuery(sql, { stripWhere: true })).toBe(
+      "SELECT * FROM TRAVERSE follows FROM readers(1) DIRECTION OUT MAX_DEPTH 3 MODE EDGES"
+    );
+  });
+
+  it("strips WHERE together with ORDER BY/LIMIT when stripWhere is set", () => {
+    const sql =
+      "SELECT username FROM TRAVERSE follows FROM readers(1) MAX_DEPTH 2 WHERE city = 'London' ORDER BY username LIMIT 10";
+    expect(buildEdgeQuery(sql, { stripWhere: true })).toBe(
+      "SELECT * FROM TRAVERSE follows FROM readers(1) MAX_DEPTH 2 MODE EDGES"
+    );
+  });
+});
+
+// ── buildNodeGraphQuery ──
+
+describe("buildNodeGraphQuery", () => {
+  it("replaces the SELECT list with * and keeps the WHERE clause", () => {
+    const sql =
+      "SELECT username, city, __depth FROM TRAVERSE follows FROM readers(1) DIRECTION OUT MAX_DEPTH 3 WHERE city = 'London'";
+    expect(buildNodeGraphQuery(sql)).toBe(
+      "SELECT * FROM TRAVERSE follows FROM readers(1) DIRECTION OUT MAX_DEPTH 3 WHERE city = 'London'"
+    );
+  });
+
+  it("strips a trailing semicolon", () => {
+    const sql = "SELECT name FROM TRAVERSE follows FROM users(1);";
+    expect(buildNodeGraphQuery(sql)).toBe(
+      "SELECT * FROM TRAVERSE follows FROM users(1)"
+    );
+  });
+
+  it("returns non-TRAVERSE queries unchanged", () => {
+    const sql = "SELECT id, name FROM users WHERE id = 1";
+    expect(buildNodeGraphQuery(sql)).toBe(sql);
   });
 });
 
